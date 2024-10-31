@@ -1,0 +1,2914 @@
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "id": "5d3a7a7b",
+   "metadata": {
+    "papermill": {
+     "duration": 0.059866,
+     "end_time": "2024-10-31T08:17:59.069646",
+     "exception": false,
+     "start_time": "2024-10-31T08:17:59.009780",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "source": [
+    "## 1. Wav2Lip\n",
+    "[Wav2Lip](https://arxiv.org/pdf/2008.10010.pdf) is a GAN-based model for generating lip-synced facial animations. It consists of three main parts: a generator, a discriminator, and a pre-trained lip-sync expert.\n",
+    "\n",
+    "Given any input video and audio, Wav2Lip outputs a synchronized video. The generator includes a speech and identity encoder, which process the audio and video face, then combine to create the output frames. A visual quality discriminator ensures video clarity, while the pre-trained lip-sync expert further enhances synchronization accuracy.\n",
+    "\n",
+    "\n",
+    "### Lip-Sync Expert\n",
+    "Lip-sync Expert is based on **[SyncNet](https://www.robots.ox.ac.uk/~vgg/publications/2016/Chung16a/)**, determines audio-video synchronization. It uses two convolutional neural network encoders to extract features from speech (MFCC) and lip frames, mapping both to a shared feature space. Sync accuracy is measured via contrastive loss: smaller values indicate better sync, while larger values indicate a mismatch. For Wav2Lip, SyncNet’s architecture is deepened, with a residual structure added and mel-spectrograms replacing MFCC as the audio input.\n",
+    "**"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 1,
+   "id": "73097a72",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-10-31T08:17:59.173056Z",
+     "iopub.status.busy": "2024-10-31T08:17:59.171193Z",
+     "iopub.status.idle": "2024-10-31T08:17:59.174969Z",
+     "shell.execute_reply": "2024-10-31T08:17:59.173967Z"
+    },
+    "papermill": {
+     "duration": 0.06207,
+     "end_time": "2024-10-31T08:17:59.175194",
+     "exception": false,
+     "start_time": "2024-10-31T08:17:59.113124",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "# !pip install -r requirements.txt"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "cc030125",
+   "metadata": {
+    "papermill": {
+     "duration": 0.049183,
+     "end_time": "2024-10-31T08:17:59.287002",
+     "exception": false,
+     "start_time": "2024-10-31T08:17:59.237819",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "source": [
+    "## 2. Data set preparation and preprocessing\n",
+    "\n",
+    "**Download of LRS2 dataset**\n",
+    "The download address of the data set required for the experiment is: <a href=\"http://www.robots.ox.ac.uk/~vgg/data/lip_reading/lrs2.html\">LRS2 dataset</a>, download the The data set requires permission from the BBC, and an application email needs to be sent to obtain the download key. For specific operations, please refer to the instructions on the webpage. After downloading, unzip the data set to the `mvlrs_v1/` folder in this directory, and move the file list files `train.txt, val.txt, test.txt` in LRS2 to the `filelists/` folder , the final directory structure of the data set is as follows.\n",
+    "```\n",
+    "data_root (mvlrs_v1)\n",
+    "├── main, pretrain (we only use the data in the main folder)\n",
+    "| ├── Folder list\n",
+    "| │ ├── 5-digit video ID ending in .mp4\n",
+    "```\n",
+    "**Dataset Preprocessing**\n",
+    "Most of the videos in the data set contain half-body or full-body images of people, and our model only requires a small part of the face. Therefore, in the preprocessing stage, we need to perform frame-framing operations on each video, extract each frame of the video, and then use the `face detection` toolkit to locate and crop the face position, retaining only the picture frames of the face. At the same time, we also need to separate the speech in each video."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 2,
+   "id": "a85cc6f2",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-10-31T08:17:59.370762Z",
+     "iopub.status.busy": "2024-10-31T08:17:59.369842Z",
+     "iopub.status.idle": "2024-10-31T08:17:59.372849Z",
+     "shell.execute_reply": "2024-10-31T08:17:59.373501Z"
+    },
+    "papermill": {
+     "duration": 0.04845,
+     "end_time": "2024-10-31T08:17:59.373718",
+     "exception": false,
+     "start_time": "2024-10-31T08:17:59.325268",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "# !python preprocess.py --data_root \"./mvlrs_v1/main\" --preprocessed_root \"./lrs2_preprocessed\" "
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "4e54735d",
+   "metadata": {
+    "papermill": {
+     "duration": 0.036638,
+     "end_time": "2024-10-31T08:17:59.453647",
+     "exception": false,
+     "start_time": "2024-10-31T08:17:59.417009",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "source": [
+    "The directory structure under the preprocessed `lrs2_preprocessed/` folder is as follows\n",
+    "```\n",
+    "preprocessed_root (lrs2_preprocessed)\n",
+    "├── Folder list\n",
+    "| ├── Five-digit video ID\n",
+    "| │ ├── *.jpg\n",
+    "| │ ├── audio.wav\n",
+    "```"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "bdc4b4db",
+   "metadata": {
+    "papermill": {
+     "duration": 0.03963,
+     "end_time": "2024-10-31T08:17:59.532885",
+     "exception": false,
+     "start_time": "2024-10-31T08:17:59.493255",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "source": [
+    "## 3. Model training\n",
+    "Model training is mainly divided into two parts:\n",
+    "1. Training of Lip-Sync Expert Discriminator. The official pre-trained model [weight] is provided here (https://iiitaphyd-my.sharepoint.com/:u:/g/personal/radrabha_m_research_iiit_ac_in/EQRvmiZg-HRAjvI6zqN9eTEBP74KefynCwPWVmF57l-AYA?e=ZRPHKP)\n",
+    "2. Training of Wav2Lip model.\n",
+    "\n",
+    "### 3.1 Pre-training Lip-Sync Expert\n",
+    "#### 3.1.1. Network construction\n",
+    "Above we have introduced the basic network structure of SyncNet, which mainly consists of a series of (Conv+BatchNorm+Relu). Here we have made some improvements to it and added a residual structure. In order to facilitate subsequent use, we have encapsulated (Conv+BatchNorm+Relu) and the residual module."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 3,
+   "id": "26da63a9",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-10-31T08:17:59.695124Z",
+     "iopub.status.busy": "2024-10-31T08:17:59.694374Z",
+     "iopub.status.idle": "2024-10-31T08:17:59.703458Z",
+     "shell.execute_reply": "2024-10-31T08:17:59.703978Z",
+     "shell.execute_reply.started": "2021-07-30T15:10:55.205557Z"
+    },
+    "papermill": {
+     "duration": 0.132326,
+     "end_time": "2024-10-31T08:17:59.704149",
+     "exception": false,
+     "start_time": "2024-10-31T08:17:59.571823",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "/kaggle/input/wave2lip/wav2lip_homework\n"
+     ]
+    }
+   ],
+   "source": [
+    "%cd ../input/wave2lip/wav2lip_homework"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 4,
+   "id": "be87eef8",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-10-31T08:17:59.787496Z",
+     "iopub.status.busy": "2024-10-31T08:17:59.786852Z",
+     "iopub.status.idle": "2024-10-31T08:18:01.161985Z",
+     "shell.execute_reply": "2024-10-31T08:18:01.161429Z",
+     "shell.execute_reply.started": "2021-07-30T15:10:59.610288Z"
+    },
+    "papermill": {
+     "duration": 1.418976,
+     "end_time": "2024-10-31T08:18:01.162132",
+     "exception": false,
+     "start_time": "2024-10-31T08:17:59.743156",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "import torch\n",
+    "from torch import nn\n",
+    "from torch.nn import functional as F\n",
+    "\n",
+    "class Conv2d(nn.Module):\n",
+    "    def __init__(self, cin, cout, kernel_size, stride, padding, residual=False, *args, **kwargs):\n",
+    "        super().__init__(*args, **kwargs)\n",
+    "        ########TODO######################\n",
+    "        # Complete the code according to the following network structure requirements\n",
+    "        # self.conv_block: Sequential structure, Conv2d+BatchNorm\n",
+    "        # self.act: relu activation function\n",
+    "        self.conv_block = nn.Sequential(\n",
+    "                            nn.Conv2d(cin, cout, kernel_size, stride, padding),\n",
+    "                            nn.BatchNorm2d(cout)\n",
+    "                            )\n",
+    "        self.act = nn.ReLU()\n",
+    "        self.residual = residual\n",
+    "\n",
+    "    def forward(self, x):\n",
+    "        out = self.conv_block(x)\n",
+    "        if self.residual:\n",
+    "            out += x\n",
+    "        return self.act(out)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "8ab7be7e",
+   "metadata": {
+    "papermill": {
+     "duration": 0.037536,
+     "end_time": "2024-10-31T08:18:01.237087",
+     "exception": false,
+     "start_time": "2024-10-31T08:18:01.199551",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "source": [
+    "#### SyncNet mainly consists of two parts:\n",
+    "Face_encoder and Audio_encoder. Each part is composed of multiple Conv2d modules, which implement downsampling and feature extraction of the input by specifying the size of the convolution kernel."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 5,
+   "id": "8a7cf2e4",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-10-31T08:18:01.335323Z",
+     "iopub.status.busy": "2024-10-31T08:18:01.334341Z",
+     "iopub.status.idle": "2024-10-31T08:18:01.337223Z",
+     "shell.execute_reply": "2024-10-31T08:18:01.336584Z",
+     "shell.execute_reply.started": "2021-07-30T15:11:04.53338Z"
+    },
+    "papermill": {
+     "duration": 0.063145,
+     "end_time": "2024-10-31T08:18:01.337357",
+     "exception": false,
+     "start_time": "2024-10-31T08:18:01.274212",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "import torch\n",
+    "from torch import nn\n",
+    "from torch.nn import functional as F\n",
+    "\n",
+    "class SyncNet_color(nn.Module):\n",
+    "    def __init__(self):\n",
+    "        super(SyncNet_color, self).__init__()\n",
+    "        \n",
+    "        ################TODO###################\n",
+    "#According to the network structure diagram provided above, complete the parameters of the convolutional network below.\n",
+    "\n",
+    "        self.face_encoder = nn.Sequential(\n",
+    "            Conv2d(15, 32, kernel_size=(7, 7), stride=1, padding=3),\n",
+    "\n",
+    "            Conv2d(32, 64, kernel_size=5, stride=(1, 2), padding=1),\n",
+    "            Conv2d(64, 64, kernel_size=3, stride=1, padding=1, residual=True),\n",
+    "            Conv2d(64, 64, kernel_size=3, stride=1, padding=1, residual=True),\n",
+    "\n",
+    "            Conv2d(64, 128, kernel_size=3, stride=2, padding=1),\n",
+    "            Conv2d(128, 128, kernel_size=3, stride=1, padding=1, residual=True),\n",
+    "            Conv2d(128, 128, kernel_size=3, stride=1, padding=1, residual=True),\n",
+    "            Conv2d(128, 128, kernel_size=3, stride=1, padding=1, residual=True),\n",
+    "\n",
+    "            Conv2d(128, 256, kernel_size=3, stride=2, padding=1),\n",
+    "            Conv2d(256, 256, kernel_size=3, stride=1, padding=1, residual=True),\n",
+    "            Conv2d(256, 256, kernel_size=3, stride=1, padding=1, residual=True),\n",
+    "\n",
+    "            Conv2d(256, 512, kernel_size=3, stride=2, padding=1),\n",
+    "            Conv2d(512, 512, kernel_size=3, stride=1, padding=1, residual=True),\n",
+    "            Conv2d(512, 512, kernel_size=3, stride=1, padding=1, residual=True),\n",
+    "\n",
+    "            Conv2d(512, 512, kernel_size=3, stride=2, padding=1),\n",
+    "            Conv2d(512, 512, kernel_size=3, stride=1, padding=0),\n",
+    "            Conv2d(512, 512, kernel_size=1, stride=1, padding=0),)\n",
+    "\n",
+    "        self.audio_encoder = nn.Sequential(\n",
+    "            Conv2d(1, 32, kernel_size=3, stride=1, padding=1),\n",
+    "            Conv2d(32, 32, kernel_size=3, stride=1, padding=1, residual=True),\n",
+    "            Conv2d(32, 32, kernel_size=3, stride=1, padding=1, residual=True),\n",
+    "\n",
+    "            Conv2d(32, 64, kernel_size=3, stride=(3, 1), padding=1),\n",
+    "            Conv2d(64, 64, kernel_size=3, stride=1, padding=1, residual=True),\n",
+    "            Conv2d(64, 64, kernel_size=3, stride=1, padding=1, residual=True),\n",
+    "\n",
+    "            Conv2d(64, 128, kernel_size=3, stride=3, padding=1),\n",
+    "            Conv2d(128, 128, kernel_size=3, stride=1, padding=1, residual=True),\n",
+    "            Conv2d(128, 128, kernel_size=3, stride=1, padding=1, residual=True),\n",
+    "\n",
+    "            Conv2d(128, 256, kernel_size=3, stride=(3, 2), padding=1),\n",
+    "            Conv2d(256, 256, kernel_size=3, stride=1, padding=1, residual=True),\n",
+    "            Conv2d(256, 256, kernel_size=3, stride=1, padding=1, residual=True),\n",
+    "\n",
+    "            Conv2d(256, 512, kernel_size=3, stride=1, padding=0),\n",
+    "            Conv2d(512, 512, kernel_size=1, stride=1, padding=0),)\n",
+    "\n",
+    "    def forward(self, audio_sequences, face_sequences): # audio_sequences := (B, dim, T)\n",
+    "        \n",
+    "        ########################TODO######################\n",
+    "        # Forward propagation\n",
+    "        face_embedding = self.face_encoder(face_sequences)\n",
+    "        audio_embedding = self.audio_encoder(audio_sequences)\n",
+    "\n",
+    "        audio_embedding = audio_embedding.view(audio_embedding.size(0), -1)\n",
+    "        face_embedding = face_embedding.view(face_embedding.size(0), -1)\n",
+    "\n",
+    "        audio_embedding = F.normalize(audio_embedding, p=2, dim=1)\n",
+    "        face_embedding = F.normalize(face_embedding, p=2, dim=1)\n",
+    "\n",
+    "\n",
+    "        return audio_embedding, face_embedding"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 6,
+   "id": "0a4db68d",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-10-31T08:18:01.418084Z",
+     "iopub.status.busy": "2024-10-31T08:18:01.417444Z",
+     "iopub.status.idle": "2024-10-31T08:18:03.490122Z",
+     "shell.execute_reply": "2024-10-31T08:18:03.489447Z",
+     "shell.execute_reply.started": "2021-07-30T15:11:11.303526Z"
+    },
+    "papermill": {
+     "duration": 2.115542,
+     "end_time": "2024-10-31T08:18:03.490263",
+     "exception": false,
+     "start_time": "2024-10-31T08:18:01.374721",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "from os.path import dirname, join, basename, isfile\n",
+    "from tqdm import tqdm\n",
+    "\n",
+    "from models import SyncNet_color as SyncNet\n",
+    "import audio\n",
+    "\n",
+    "import torch\n",
+    "from torch import nn\n",
+    "from torch import optim\n",
+    "import torch.backends.cudnn as cudnn\n",
+    "from torch.utils import data as data_utils\n",
+    "import numpy as np\n",
+    "\n",
+    "from glob import glob\n",
+    "\n",
+    "import os, random, cv2, argparse\n",
+    "from hparams import hparams, get_image_list"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "a674e7db",
+   "metadata": {
+    "papermill": {
+     "duration": 0.036853,
+     "end_time": "2024-10-31T08:18:03.565511",
+     "exception": false,
+     "start_time": "2024-10-31T08:18:03.528658",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "source": [
+    "#### 3.1.2 Defining Dataset"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 7,
+   "id": "c7e7b66a",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-10-31T08:18:03.691829Z",
+     "iopub.status.busy": "2024-10-31T08:18:03.691114Z",
+     "iopub.status.idle": "2024-10-31T08:18:03.694934Z",
+     "shell.execute_reply": "2024-10-31T08:18:03.694302Z",
+     "shell.execute_reply.started": "2021-07-30T15:11:14.929415Z"
+    },
+    "papermill": {
+     "duration": 0.092005,
+     "end_time": "2024-10-31T08:18:03.695075",
+     "exception": false,
+     "start_time": "2024-10-31T08:18:03.603070",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "use_cuda: True\n"
+     ]
+    }
+   ],
+   "source": [
+    "global_step = 0 #Starting step\n",
+    "global_epoch = 0 #Starting epoch\n",
+    "use_cuda = torch.cuda.is_available()#Training device cpu or gpu\n",
+    "print('use_cuda: {}'.format(use_cuda))\n",
+    "\n",
+    "syncnet_T = 5 ## Select 200ms video clips for training each time. The fps of the video is 25, so the number of frames corresponding to 200ms is: 25*0.2=5 frames\n",
+    "syncnet_mel_step_size = 16 # The length of the mel-spectrogram feature of the sound corresponding to 200ms is 16.\n",
+    "data_root=\"/kaggle/input/wav2lippreprocessed/lrs2_preprocessed\" #The location of the data set"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 8,
+   "id": "4d71e7a9",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-10-31T08:18:03.789706Z",
+     "iopub.status.busy": "2024-10-31T08:18:03.789037Z",
+     "iopub.status.idle": "2024-10-31T08:18:03.791826Z",
+     "shell.execute_reply": "2024-10-31T08:18:03.791229Z",
+     "shell.execute_reply.started": "2021-07-30T15:18:29.73854Z"
+    },
+    "papermill": {
+     "duration": 0.059276,
+     "end_time": "2024-10-31T08:18:03.791963",
+     "exception": false,
+     "start_time": "2024-10-31T08:18:03.732687",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "class Dataset(object):\n",
+    "    def __init__(self, split):\n",
+    "        self.all_videos = get_image_list(data_root, split)\n",
+    "\n",
+    "    def get_frame_id(self, frame):\n",
+    "        return int(basename(frame).split('.')[0])\n",
+    "\n",
+    "    def get_window(self, start_frame):\n",
+    "        start_id = self.get_frame_id(start_frame)\n",
+    "        vidname = dirname(start_frame)\n",
+    "\n",
+    "        window_fnames = []\n",
+    "        for frame_id in range(start_id, start_id + syncnet_T):\n",
+    "            frame = join(vidname, '{}.jpg'.format(frame_id))\n",
+    "            if not isfile(frame):\n",
+    "                return None\n",
+    "            window_fnames.append(frame)\n",
+    "        return window_fnames\n",
+    "\n",
+    "    def crop_audio_window(self, spec, start_frame):\n",
+    "        # num_frames = (T x hop_size * fps) / sample_rate\n",
+    "        start_frame_num = self.get_frame_id(start_frame)\n",
+    "        start_idx = int(80. * (start_frame_num / float(hparams.fps)))\n",
+    "\n",
+    "        end_idx = start_idx + syncnet_mel_step_size\n",
+    "\n",
+    "        return spec[start_idx : end_idx, :]\n",
+    "\n",
+    "\n",
+    "    def __len__(self):\n",
+    "        return len(self.all_videos)\n",
+    "\n",
+    "    def __getitem__(self, idx):\n",
+    "        \"\"\"\n",
+    "        return: x,mel,y\n",
+    "        x: Five pictures of lips\n",
+    "        mel: mel spectrogram of the corresponding voice\n",
+    "        t: synchronous or not synchronized\n",
+    "        \n",
+    "        \"\"\"\n",
+    "        while 1:\n",
+    "            idx = random.randint(0, len(self.all_videos) - 1)\n",
+    "            vidname = self.all_videos[idx]\n",
+    "\n",
+    "            img_names = list(glob(join(vidname, '*.jpg')))\n",
+    "            if len(img_names) <= 3 * syncnet_T:\n",
+    "                continue\n",
+    "            img_name = random.choice(img_names)\n",
+    "            wrong_img_name = random.choice(img_names)\n",
+    "            while wrong_img_name == img_name:\n",
+    "                wrong_img_name = random.choice(img_names)\n",
+    "            \n",
+    "            \n",
+    "            #Randomly decide whether to generate negative samples or positive samples\n",
+    "            if random.choice([True, False]):\n",
+    "                y = torch.ones(1).float()\n",
+    "                chosen = img_name\n",
+    "            else:\n",
+    "                y = torch.zeros(1).float()\n",
+    "                chosen = wrong_img_name\n",
+    "\n",
+    "            window_fnames = self.get_window(chosen)\n",
+    "            if window_fnames is None:\n",
+    "                continue\n",
+    "\n",
+    "            window = []\n",
+    "            all_read = True\n",
+    "            for fname in window_fnames:\n",
+    "                img = cv2.imread(fname)\n",
+    "                if img is None:\n",
+    "                    all_read = False\n",
+    "                    break\n",
+    "                try:\n",
+    "                    img = cv2.resize(img, (hparams.img_size, hparams.img_size))\n",
+    "                except Exception as e:\n",
+    "                    all_read = False\n",
+    "                    break\n",
+    "\n",
+    "                window.append(img)\n",
+    "\n",
+    "            if not all_read: continue\n",
+    "\n",
+    "            try:\n",
+    "                wavpath = join(vidname, \"audio.wav\")\n",
+    "                wav = audio.load_wav(wavpath, hparams.sample_rate)\n",
+    "\n",
+    "                orig_mel = audio.melspectrogram(wav).T\n",
+    "            except Exception as e:\n",
+    "                continue\n",
+    "\n",
+    "            mel = self.crop_audio_window(orig_mel.copy(), img_name)\n",
+    "\n",
+    "            if (mel.shape[0] != syncnet_mel_step_size):\n",
+    "                continue\n",
+    "\n",
+    "            # H x W x 3 * T\n",
+    "            x = np.concatenate(window, axis=2) / 255.\n",
+    "            x = x.transpose(2, 0, 1)\n",
+    "            x = x[:, x.shape[1]//2:]\n",
+    "\n",
+    "            x = torch.FloatTensor(x)\n",
+    "            mel = torch.FloatTensor(mel.T).unsqueeze(0)\n",
+    "\n",
+    "            return x, mel, y"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 9,
+   "id": "5ba393ea",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-10-31T08:18:03.870188Z",
+     "iopub.status.busy": "2024-10-31T08:18:03.869597Z",
+     "iopub.status.idle": "2024-10-31T08:18:04.113378Z",
+     "shell.execute_reply": "2024-10-31T08:18:04.114465Z",
+     "shell.execute_reply.started": "2021-07-30T15:18:33.470434Z"
+    },
+    "papermill": {
+     "duration": 0.285581,
+     "end_time": "2024-10-31T08:18:04.114800",
+     "exception": false,
+     "start_time": "2024-10-31T08:18:03.829219",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "torch.Size([15, 48, 96])\n",
+      "torch.Size([1, 80, 16])\n",
+      "torch.Size([1])\n"
+     ]
+    }
+   ],
+   "source": [
+    "ds=Dataset(\"train\")\n",
+    "x,mel,t=ds[0]\n",
+    "print(x.shape)\n",
+    "print(mel.shape)\n",
+    "print(t.shape)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 10,
+   "id": "10390b48",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-10-31T08:18:04.270035Z",
+     "iopub.status.busy": "2024-10-31T08:18:04.269328Z",
+     "iopub.status.idle": "2024-10-31T08:18:04.409487Z",
+     "shell.execute_reply": "2024-10-31T08:18:04.408951Z",
+     "shell.execute_reply.started": "2021-07-30T15:18:36.933382Z"
+    },
+    "papermill": {
+     "duration": 0.212352,
+     "end_time": "2024-10-31T08:18:04.409630",
+     "exception": false,
+     "start_time": "2024-10-31T08:18:04.197278",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "<matplotlib.image.AxesImage at 0x79b9a3bdd550>"
+      ]
+     },
+     "execution_count": 10,
+     "metadata": {},
+     "output_type": "execute_result"
+    },
+    {
+     "data": {
+      "image/png": "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\n",
+      "text/plain": [
+       "<Figure size 432x288 with 1 Axes>"
+      ]
+     },
+     "metadata": {
+      "needs_background": "light"
+     },
+     "output_type": "display_data"
+    }
+   ],
+   "source": [
+    "import matplotlib.pyplot as plt\n",
+    "plt.imshow(mel[0].numpy())"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 11,
+   "id": "fc625fe0",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-10-31T08:18:04.516840Z",
+     "iopub.status.busy": "2024-10-31T08:18:04.515955Z",
+     "iopub.status.idle": "2024-10-31T08:18:04.627036Z",
+     "shell.execute_reply": "2024-10-31T08:18:04.626465Z",
+     "shell.execute_reply.started": "2021-07-30T15:18:56.039099Z"
+    },
+    "papermill": {
+     "duration": 0.177603,
+     "end_time": "2024-10-31T08:18:04.627179",
+     "exception": false,
+     "start_time": "2024-10-31T08:18:04.449576",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "<matplotlib.image.AxesImage at 0x79b9a3aee210>"
+      ]
+     },
+     "execution_count": 11,
+     "metadata": {},
+     "output_type": "execute_result"
+    },
+    {
+     "data": {
+      "image/png": "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\n",
+      "text/plain": [
+       "<Figure size 432x288 with 1 Axes>"
+      ]
+     },
+     "metadata": {
+      "needs_background": "light"
+     },
+     "output_type": "display_data"
+    }
+   ],
+   "source": [
+    "plt.imshow(x[:3,:,:].transpose(0,2).numpy())"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "b2a92331",
+   "metadata": {
+    "papermill": {
+     "duration": 0.041026,
+     "end_time": "2024-10-31T08:18:04.710490",
+     "exception": false,
+     "start_time": "2024-10-31T08:18:04.669464",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "source": [
+    "### 3.2 Training\n",
+    "\n",
+    "Use cosine_loss as loss function"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 12,
+   "id": "0dc6143b",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-10-31T08:18:04.797865Z",
+     "iopub.status.busy": "2024-10-31T08:18:04.796998Z",
+     "iopub.status.idle": "2024-10-31T08:18:04.799833Z",
+     "shell.execute_reply": "2024-10-31T08:18:04.799228Z",
+     "shell.execute_reply.started": "2021-07-30T15:19:00.674203Z"
+    },
+    "papermill": {
+     "duration": 0.048608,
+     "end_time": "2024-10-31T08:18:04.799973",
+     "exception": false,
+     "start_time": "2024-10-31T08:18:04.751365",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "#Definition of loss function\n",
+    "logloss = nn.BCELoss() # Cross entropy loss\n",
+    "def cosine_loss(a, v, y):#Cosine similarity loss\n",
+    "    \"\"\"\n",
+    "    a: output of audio_encoder\n",
+    "    v: output of video face_encoder\n",
+    "    y: the true value of whether to synchronize\n",
+    "    \"\"\"\n",
+    "    d = nn.functional.cosine_similarity(a, v)\n",
+    "    loss = logloss(d.unsqueeze(1), y)\n",
+    "\n",
+    "    return loss"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 13,
+   "id": "81360784",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-10-31T08:18:04.901229Z",
+     "iopub.status.busy": "2024-10-31T08:18:04.900586Z",
+     "iopub.status.idle": "2024-10-31T08:18:04.903392Z",
+     "shell.execute_reply": "2024-10-31T08:18:04.902771Z",
+     "shell.execute_reply.started": "2021-07-30T15:19:09.309393Z"
+    },
+    "papermill": {
+     "duration": 0.062539,
+     "end_time": "2024-10-31T08:18:04.903515",
+     "exception": false,
+     "start_time": "2024-10-31T08:18:04.840976",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "def train(device, model, train_data_loader, test_data_loader, optimizer,\n",
+    "          checkpoint_dir=None, checkpoint_interval=None, nepochs=None):\n",
+    "\n",
+    "    global global_step, global_epoch\n",
+    "    resumed_step = global_step\n",
+    "    \n",
+    "    while global_epoch < nepochs:\n",
+    "        running_loss = 0.\n",
+    "        prog_bar = tqdm(enumerate(train_data_loader))\n",
+    "        for step, (x, mel, y) in prog_bar:\n",
+    "            model.train()\n",
+    "            optimizer.zero_grad()\n",
+    "\n",
+    "            #####TODO###########\n",
+    "            ####################\n",
+    "            #Complete model training\n",
+    "            x = x.to(device)\n",
+    "\n",
+    "            mel = mel.to(device)\n",
+    "\n",
+    "            a, v = model(mel, x)\n",
+    "            y = y.to(device)\n",
+    "\n",
+    "            loss = cosine_loss(a, v, y)\n",
+    "            loss.backward()\n",
+    "            optimizer.step()\n",
+    "                \n",
+    "            \n",
+    "\n",
+    "            global_step += 1\n",
+    "            cur_session_steps = global_step - resumed_step\n",
+    "            running_loss += loss.item()\n",
+    "\n",
+    "            if global_step == 1 or global_step % checkpoint_interval == 0:\n",
+    "                save_checkpoint(\n",
+    "                    model, optimizer, global_step, checkpoint_dir, global_epoch)\n",
+    "\n",
+    "            if global_step % hparams.syncnet_eval_interval == 0:\n",
+    "                with torch.no_grad():\n",
+    "                    eval_model(test_data_loader, global_step, device, model, checkpoint_dir)\n",
+    "\n",
+    "            prog_bar.set_description('Epoch: {} Loss: {}'.format(global_epoch, running_loss / (step + 1)))\n",
+    "\n",
+    "        global_epoch += 1\n",
+    "\n",
+    "def eval_model(test_data_loader, global_step, device, model, checkpoint_dir):\n",
+    "    #Evaluate on the test set\n",
+    "    eval_steps = 1400\n",
+    "    print('Evaluating for {} steps'.format(eval_steps))\n",
+    "    losses = []\n",
+    "    while 1:\n",
+    "        for step, (x, mel, y) in enumerate(test_data_loader):\n",
+    "\n",
+    "            model.eval()\n",
+    "\n",
+    "            # Transform data to CUDA device\n",
+    "            x = x.to(device)\n",
+    "\n",
+    "            mel = mel.to(device)\n",
+    "\n",
+    "            a, v = model(mel, x)\n",
+    "            y = y.to(device)\n",
+    "\n",
+    "            loss = cosine_loss(a, v, y)\n",
+    "            losses.append(loss.item())\n",
+    "\n",
+    "            if step > eval_steps: break\n",
+    "\n",
+    "        averaged_loss = sum(losses) / len(losses)\n",
+    "        print(averaged_loss)\n",
+    "\n",
+    "        return\n",
+    "\n",
+    "latest_checkpoint_path = ''\n",
+    "def save_checkpoint(model, optimizer, step, checkpoint_dir, epoch):\n",
+    "    #Save training results checkpoint\n",
+    "    global latest_checkpoint_path\n",
+    "    \n",
+    "    checkpoint_path = join(\n",
+    "        checkpoint_dir, \"checkpoint_step{:09d}.pth\".format(global_step))\n",
+    "    optimizer_state = optimizer.state_dict() if hparams.save_optimizer_state else None\n",
+    "    torch.save({\n",
+    "        \"state_dict\": model.state_dict(),\n",
+    "        \"optimizer\": optimizer_state,\n",
+    "        \"global_step\": step,\n",
+    "        \"global_epoch\": epoch,\n",
+    "    }, checkpoint_path)\n",
+    "    latest_checkpoint_path = checkpoint_path\n",
+    "    print(\"Saved checkpoint:\", checkpoint_path)\n",
+    "\n",
+    "def _load(checkpoint_path):\n",
+    "    if use_cuda:\n",
+    "        checkpoint = torch.load(checkpoint_path)\n",
+    "    else:\n",
+    "        checkpoint = torch.load(checkpoint_path,\n",
+    "                                map_location=lambda storage, loc: storage)\n",
+    "    return checkpoint\n",
+    "\n",
+    "def load_checkpoint(path, model, optimizer, reset_optimizer=False):\n",
+    "    #Read the saved information of the specified checkpoint\n",
+    "    global global_step\n",
+    "    global global_epoch\n",
+    "\n",
+    "    print(\"Load checkpoint from: {}\".format(path))\n",
+    "    checkpoint = _load(path)\n",
+    "    model.load_state_dict(checkpoint[\"state_dict\"])\n",
+    "    if not reset_optimizer:\n",
+    "        optimizer_state = checkpoint[\"optimizer\"]\n",
+    "        if optimizer_state is not None:\n",
+    "            print(\"Load optimizer state from {}\".format(path))\n",
+    "            optimizer.load_state_dict(checkpoint[\"optimizer\"])\n",
+    "    global_step = checkpoint[\"global_step\"]\n",
+    "    global_epoch = checkpoint[\"global_epoch\"]\n",
+    "\n",
+    "    return model"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "ae4b0b82",
+   "metadata": {
+    "papermill": {
+     "duration": 0.040694,
+     "end_time": "2024-10-31T08:18:04.985286",
+     "exception": false,
+     "start_time": "2024-10-31T08:18:04.944592",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "source": [
+    "#### Start training below. \n",
+    "The final Loss reference value is about 0.20. At this time, the model can achieve better discrimination results"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 14,
+   "id": "82ebdf8c",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-10-31T08:18:05.076733Z",
+     "iopub.status.busy": "2024-10-31T08:18:05.076107Z",
+     "iopub.status.idle": "2024-10-31T10:29:10.318566Z",
+     "shell.execute_reply": "2024-10-31T10:29:10.318038Z",
+     "shell.execute_reply.started": "2021-07-30T15:19:14.2154Z"
+    },
+    "papermill": {
+     "duration": 7865.29249,
+     "end_time": "2024-10-31T10:29:10.318725",
+     "exception": false,
+     "start_time": "2024-10-31T08:18:05.026235",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "total trainable params 16435072\n",
+      "Load checkpoint from: /kaggle/input/wav2lip24epoch/expert_checkpoints/checkpoint_step000060000.pth\n"
+     ]
+    },
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "Epoch: 20 Loss: 0.48509527195706625: : 2865it [19:31,  2.44it/s]\n",
+      "Epoch: 21 Loss: 0.48243958506388607: : 2865it [18:54,  2.53it/s]\n",
+      "Epoch: 22 Loss: 0.4792684836641448: : 2865it [18:30,  2.58it/s]\n",
+      "Epoch: 23 Loss: 0.4742409468355172: : 1404it [09:08,  2.24it/s]"
+     ]
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Saved checkpoint: /kaggle/working/expert_checkpoints/checkpoint_step000070000.pth\n",
+      "Evaluating for 1400 steps\n"
+     ]
+    },
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "Epoch: 23 Loss: 0.47431369839106313: : 1406it [09:30,  4.87s/it]"
+     ]
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "0.44587873229209113\n"
+     ]
+    },
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "Epoch: 23 Loss: 0.4736502659414451: : 2865it [18:42,  2.55it/s]\n",
+      "Epoch: 24 Loss: 0.47131751635311786: : 2865it [18:20,  2.60it/s]\n",
+      "Epoch: 25 Loss: 0.46738735726054426: : 2865it [18:10,  2.63it/s]\n",
+      "Epoch: 26 Loss: 0.46503586629481874: : 2809it [18:09,  2.29it/s]"
+     ]
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Saved checkpoint: /kaggle/working/expert_checkpoints/checkpoint_step000080000.pth\n",
+      "Evaluating for 1400 steps\n"
+     ]
+    },
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "Epoch: 26 Loss: 0.46505200048648176: : 2810it [18:32,  7.11s/it]"
+     ]
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "0.41701851697529063\n"
+     ]
+    },
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "Epoch: 26 Loss: 0.46496839194605694: : 2865it [18:44,  2.55it/s]\n"
+     ]
+    }
+   ],
+   "source": [
+    "checkpoint_dir = \"/kaggle/working/expert_checkpoints/\" #Specify the location where checkpoints are stored\n",
+    "checkpoint_path = '/kaggle/input/wav2lip24epoch/expert_checkpoints/checkpoint_step000060000.pth'\n",
+    "# Specify the path to load the checkpoint. It is not required for the first training. If you want to resume training from a certain checkpoint later, you can specify it.\n",
+    "\n",
+    "if not os.path.exists(checkpoint_dir): os.mkdir(checkpoint_dir)\n",
+    "\n",
+    "# Dataset and Dataloader setup\n",
+    "train_dataset = Dataset('train')\n",
+    "test_dataset = Dataset('val')\n",
+    "\n",
+    "############TODO#########\n",
+    "#####Train Dataloader and Test Dataloader\n",
+    "#### For specific bacthsize and other parameters, please refer to the hparams.py file\n",
+    "train_data_loader = data_utils.DataLoader(\n",
+    "    train_dataset, batch_size=hparams.batch_size, shuffle=True,\n",
+    "    num_workers=hparams.num_workers)\n",
+    "\n",
+    "test_data_loader = data_utils.DataLoader(\n",
+    "    test_dataset, batch_size=hparams.batch_size,\n",
+    "    num_workers=8)\n",
+    "\n",
+    "device = torch.device(\"cuda\" if use_cuda else \"cpu\")\n",
+    "\n",
+    "# Model\n",
+    "#####Define the SynNet model and load it to the specified device\n",
+    "model = SyncNet().to(device)\n",
+    "print('total trainable params {}'.format(sum(p.numel() for p in model.parameters() if p.requires_grad)))\n",
+    "\n",
+    "####Define the optimizer, use adam, lr refer to the hparams.py file\n",
+    "optimizer = optim.Adam([p for p in model.parameters() if p.requires_grad],\n",
+    "                       lr=1e-5)\n",
+    "\n",
+    "if checkpoint_path is not None:\n",
+    "    load_checkpoint(checkpoint_path, model, optimizer, reset_optimizer=True)\n",
+    "\n",
+    "train(device, model, train_data_loader, test_data_loader, optimizer,\n",
+    "      checkpoint_dir=checkpoint_dir,\n",
+    "      checkpoint_interval=hparams.syncnet_checkpoint_interval,\n",
+    "      nepochs=27)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "6a303ac0",
+   "metadata": {
+    "papermill": {
+     "duration": 13.134709,
+     "end_time": "2024-10-31T10:29:36.683154",
+     "exception": false,
+     "start_time": "2024-10-31T10:29:23.548445",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "source": [
+    "### 3.3 Training Wav2Lip\n",
+    "Pre-trained model [weight](https://iiitaphyd-my.sharepoint.com/:u:/g/personal/radrabha_m_research_iiit_ac_in/EdjI7bZlgApMqsVoEUUXpLsBxqXbn5z8VTmoxp55YNDcIA?e=n9ljGW)\n",
+    "#### 3.3.1. Definition of model\n",
+    "The generator of the wav2lip model first downsamples the input and then upsamples it back to its original size. For convenience, we have encapsulated the reused modules."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 15,
+   "id": "1d5f13b3",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-10-31T10:30:02.803269Z",
+     "iopub.status.busy": "2024-10-31T10:30:02.802625Z",
+     "iopub.status.idle": "2024-10-31T10:30:02.805781Z",
+     "shell.execute_reply": "2024-10-31T10:30:02.805253Z",
+     "shell.execute_reply.started": "2021-07-25T08:00:59.2366Z"
+    },
+    "papermill": {
+     "duration": 13.046611,
+     "end_time": "2024-10-31T10:30:02.805932",
+     "exception": false,
+     "start_time": "2024-10-31T10:29:49.759321",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "class nonorm_Conv2d(nn.Module): #No need to perform norm convolution\n",
+    "    def __init__(self, cin, cout, kernel_size, stride, padding, residual=False, *args, **kwargs):\n",
+    "        super().__init__(*args, **kwargs)\n",
+    "        self.conv_block = nn.Sequential(\n",
+    "                            nn.Conv2d(cin, cout, kernel_size, stride, padding),\n",
+    "                            )\n",
+    "        self.act = nn.LeakyReLU(0.01, inplace=True)\n",
+    "\n",
+    "    def forward(self, x):\n",
+    "        out = self.conv_block(x)\n",
+    "        return self.act(out)\n",
+    "\n",
+    "class Conv2dTranspose(nn.Module):# Deconvolution, upsampling\n",
+    "    def __init__(self, cin, cout, kernel_size, stride, padding, output_padding=0, *args, **kwargs):\n",
+    "        super().__init__(*args, **kwargs)\n",
+    "        ############TODO###########\n",
+    "        ## Complete self.conv_block: a Sequential structure composed of deconvolution and batchnorm\n",
+    "        self.conv_block = nn.Sequential(\n",
+    "                            nn.ConvTranspose2d(cin, cout, kernel_size, stride, padding, output_padding),\n",
+    "                            nn.BatchNorm2d(cout)\n",
+    "                            )\n",
+    "        self.act = nn.ReLU()\n",
+    "\n",
+    "    def forward(self, x):\n",
+    "        out = self.conv_block(x)\n",
+    "        return self.act(out)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "0fc8b27a",
+   "metadata": {
+    "papermill": {
+     "duration": 13.113645,
+     "end_time": "2024-10-31T10:30:28.961091",
+     "exception": false,
+     "start_time": "2024-10-31T10:30:15.847446",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "source": [
+    "#### Generator\n",
+    "It consists of two encoders: **face_encoder** and **audio_encoder**, and one **decoder**:\n",
+    "\n",
+    "**face_decoder**. The face encoder and audio encoder respectively reduce the dimensionality of the input face and voice features to obtain the features of (1, 1, 512), and concatenate the two and send them to the face decoder for upsampling, and finally obtain and input Face images of the same size."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 16,
+   "id": "2f535d3a",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-10-31T10:30:55.139446Z",
+     "iopub.status.busy": "2024-10-31T10:30:55.138724Z",
+     "iopub.status.idle": "2024-10-31T10:30:55.178077Z",
+     "shell.execute_reply": "2024-10-31T10:30:55.177443Z",
+     "shell.execute_reply.started": "2021-07-25T08:00:04.850039Z"
+    },
+    "papermill": {
+     "duration": 13.14029,
+     "end_time": "2024-10-31T10:30:55.178208",
+     "exception": false,
+     "start_time": "2024-10-31T10:30:42.037918",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "\n",
+    "#####################TODO############################\n",
+    "#Complete the parameters of the network based on the network model diagram printed below\n",
+    "\n",
+    "class Wav2Lip(nn.Module):\n",
+    "    def __init__(self):\n",
+    "        super(Wav2Lip, self).__init__()\n",
+    "\n",
+    "        self.face_encoder_blocks = nn.ModuleList([\n",
+    "            nn.Sequential(Conv2d(6, 16, kernel_size=7, stride=1, padding=3)), # 96,96\n",
+    "\n",
+    "            nn.Sequential(Conv2d(16, 32, kernel_size=3, stride=2, padding=1), # 48,48\n",
+    "            Conv2d(32, 32, kernel_size=3, stride=1, padding=1, residual=True),\n",
+    "            Conv2d(32, 32, kernel_size=3, stride=1, padding=1, residual=True)),\n",
+    "\n",
+    "            nn.Sequential(Conv2d(32, 64, kernel_size=3, stride=2, padding=1),    # 24,24\n",
+    "            Conv2d(64, 64, kernel_size=3, stride=1, padding=1, residual=True),\n",
+    "            Conv2d(64, 64, kernel_size=3, stride=1, padding=1, residual=True),\n",
+    "            Conv2d(64, 64, kernel_size=3, stride=1, padding=1, residual=True)),\n",
+    "\n",
+    "            nn.Sequential(Conv2d(64, 128, kernel_size=3, stride=2, padding=1),   # 12,12\n",
+    "            Conv2d(128, 128, kernel_size=3, stride=1, padding=1, residual=True),\n",
+    "            Conv2d(128, 128, kernel_size=3, stride=1, padding=1, residual=True)),\n",
+    "\n",
+    "            nn.Sequential(Conv2d(128, 256, kernel_size=3, stride=2, padding=1),       # 6,6\n",
+    "            Conv2d(256, 256, kernel_size=3, stride=1, padding=1, residual=True),\n",
+    "            Conv2d(256, 256, kernel_size=3, stride=1, padding=1, residual=True)),\n",
+    "\n",
+    "            nn.Sequential(Conv2d(256, 512, kernel_size=3, stride=2, padding=1),     # 3,3\n",
+    "            Conv2d(512, 512, kernel_size=3, stride=1, padding=1, residual=True),),\n",
+    "            \n",
+    "            nn.Sequential(Conv2d(512, 512, kernel_size=3, stride=1, padding=0),     # 1, 1\n",
+    "            Conv2d(512, 512, kernel_size=1, stride=1, padding=0)),])\n",
+    "\n",
+    "        self.audio_encoder = nn.Sequential(\n",
+    "            Conv2d(1, 32, kernel_size=3, stride=1, padding=1),\n",
+    "            Conv2d(32, 32, kernel_size=3, stride=1, padding=1, residual=True),\n",
+    "            Conv2d(32, 32, kernel_size=3, stride=1, padding=1, residual=True),\n",
+    "\n",
+    "            Conv2d(32, 64, kernel_size=3, stride=(3, 1), padding=1),\n",
+    "            Conv2d(64, 64, kernel_size=3, stride=1, padding=1, residual=True),\n",
+    "            Conv2d(64, 64, kernel_size=3, stride=1, padding=1, residual=True),\n",
+    "\n",
+    "            Conv2d(64, 128, kernel_size=3, stride=3, padding=1),\n",
+    "            Conv2d(128, 128, kernel_size=3, stride=1, padding=1, residual=True),\n",
+    "            Conv2d(128, 128, kernel_size=3, stride=1, padding=1, residual=True),\n",
+    "\n",
+    "            Conv2d(128, 256, kernel_size=3, stride=(3, 2), padding=1),\n",
+    "            Conv2d(256, 256, kernel_size=3, stride=1, padding=1, residual=True),\n",
+    "\n",
+    "            Conv2d(256, 512, kernel_size=3, stride=1, padding=0),\n",
+    "            Conv2d(512, 512, kernel_size=1, stride=1, padding=0),)\n",
+    "\n",
+    "        self.face_decoder_blocks = nn.ModuleList([\n",
+    "            nn.Sequential(Conv2d(512, 512, kernel_size=1, stride=1, padding=0),),\n",
+    "\n",
+    "            nn.Sequential(Conv2dTranspose(1024, 512, kernel_size=3, stride=1, padding=0), # 3,3\n",
+    "            Conv2d(512, 512, kernel_size=3, stride=1, padding=1, residual=True),),\n",
+    "\n",
+    "            nn.Sequential(Conv2dTranspose(1024, 512, kernel_size=3, stride=2, padding=1, output_padding=1),\n",
+    "            Conv2d(512, 512, kernel_size=3, stride=1, padding=1, residual=True),\n",
+    "            Conv2d(512, 512, kernel_size=3, stride=1, padding=1, residual=True),), # 6, 6\n",
+    "\n",
+    "            nn.Sequential(Conv2dTranspose(768, 384, kernel_size=3, stride=2, padding=1, output_padding=1),\n",
+    "            Conv2d(384, 384, kernel_size=3, stride=1, padding=1, residual=True),\n",
+    "            Conv2d(384, 384, kernel_size=3, stride=1, padding=1, residual=True),), # 12, 12\n",
+    "\n",
+    "            nn.Sequential(Conv2dTranspose(512, 256, kernel_size=3, stride=2, padding=1, output_padding=1),\n",
+    "            Conv2d(256, 256, kernel_size=3, stride=1, padding=1, residual=True),\n",
+    "            Conv2d(256, 256, kernel_size=3, stride=1, padding=1, residual=True),), # 24, 24\n",
+    "\n",
+    "            nn.Sequential(Conv2dTranspose(320, 128, kernel_size=3, stride=2, padding=1, output_padding=1), \n",
+    "            Conv2d(128, 128, kernel_size=3, stride=1, padding=1, residual=True),\n",
+    "            Conv2d(128, 128, kernel_size=3, stride=1, padding=1, residual=True),), # 48, 48\n",
+    "\n",
+    "            nn.Sequential(Conv2dTranspose(160, 64, kernel_size=3, stride=2, padding=1, output_padding=1),\n",
+    "            Conv2d(64, 64, kernel_size=3, stride=1, padding=1, residual=True),\n",
+    "            Conv2d(64, 64, kernel_size=3, stride=1, padding=1, residual=True),),]) # 96,96\n",
+    "\n",
+    "        self.output_block = nn.Sequential(Conv2d(80, 32, kernel_size=3, stride=1, padding=1),\n",
+    "            nn.Conv2d(32, 3, kernel_size=1, stride=1, padding=0),\n",
+    "            nn.Sigmoid()) \n",
+    "\n",
+    "    def forward(self, audio_sequences, face_sequences):\n",
+    "        # audio_sequences = (B, T, 1, 80, 16)\n",
+    "        B = audio_sequences.size(0)\n",
+    "\n",
+    "        input_dim_size = len(face_sequences.size())\n",
+    "        if input_dim_size > 4:\n",
+    "            audio_sequences = torch.cat([audio_sequences[:, i] for i in range(audio_sequences.size(1))], dim=0)\n",
+    "            face_sequences = torch.cat([face_sequences[:, :, i] for i in range(face_sequences.size(2))], dim=0)\n",
+    "\n",
+    "        audio_embedding = self.audio_encoder(audio_sequences) # B, 512, 1, 1\n",
+    "\n",
+    "        feats = []\n",
+    "        x = face_sequences\n",
+    "        for f in self.face_encoder_blocks:\n",
+    "            x = f(x)\n",
+    "            feats.append(x)\n",
+    "\n",
+    "        x = audio_embedding\n",
+    "        for f in self.face_decoder_blocks:\n",
+    "            x = f(x)\n",
+    "            try:\n",
+    "                x = torch.cat((x, feats[-1]), dim=1)\n",
+    "            except Exception as e:\n",
+    "                print(x.size())\n",
+    "                print(feats[-1].size())\n",
+    "                raise e\n",
+    "            \n",
+    "            feats.pop()\n",
+    "\n",
+    "        x = self.output_block(x)\n",
+    "\n",
+    "        if input_dim_size > 4:\n",
+    "            x = torch.split(x, B, dim=0) # [(B, C, H, W)]\n",
+    "            outputs = torch.stack(x, dim=2) # (B, C, T, H, W)\n",
+    "\n",
+    "        else:\n",
+    "            outputs = x\n",
+    "            \n",
+    "        return outputs"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "ae42c21d",
+   "metadata": {
+    "papermill": {
+     "duration": 13.255135,
+     "end_time": "2024-10-31T10:31:21.538780",
+     "exception": false,
+     "start_time": "2024-10-31T10:31:08.283645",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "source": [
+    "#### Discriminator\n",
+    "The **discriminator** is also composed of a series of convolutional neural networks. It inputs a face image and uses the face encoder to reduce its dimension to 512 dimensions."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 17,
+   "id": "96ec9286",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-10-31T10:31:47.630377Z",
+     "iopub.status.busy": "2024-10-31T10:31:47.629303Z",
+     "iopub.status.idle": "2024-10-31T10:31:47.632123Z",
+     "shell.execute_reply": "2024-10-31T10:31:47.631573Z",
+     "shell.execute_reply.started": "2021-07-25T08:00:08.961755Z"
+    },
+    "papermill": {
+     "duration": 13.076691,
+     "end_time": "2024-10-31T10:31:47.632264",
+     "exception": false,
+     "start_time": "2024-10-31T10:31:34.555573",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "\n",
+    "###########TODO##################\n",
+    "####Complete discriminator model\n",
+    "class Wav2Lip_disc_qual(nn.Module):\n",
+    "    def __init__(self):\n",
+    "        super(Wav2Lip_disc_qual, self).__init__()\n",
+    "\n",
+    "        self.face_encoder_blocks = nn.ModuleList([\n",
+    "            nn.Sequential(nonorm_Conv2d(3, 32, kernel_size=7, stride=1, padding=3)), # 48,96\n",
+    "\n",
+    "            nn.Sequential(nonorm_Conv2d(32, 64, kernel_size=5, stride=(1, 2), padding=2), # 48,48\n",
+    "            nonorm_Conv2d(64, 64, kernel_size=5, stride=1, padding=2)),\n",
+    "\n",
+    "            nn.Sequential(nonorm_Conv2d(64, 128, kernel_size=5, stride=2, padding=2),    # 24,24\n",
+    "            nonorm_Conv2d(128, 128, kernel_size=5, stride=1, padding=2)),\n",
+    "\n",
+    "            nn.Sequential(nonorm_Conv2d(128, 256, kernel_size=5, stride=2, padding=2),   # 12,12\n",
+    "            nonorm_Conv2d(256, 256, kernel_size=5, stride=1, padding=2)),\n",
+    "\n",
+    "            nn.Sequential(nonorm_Conv2d(256, 512, kernel_size=3, stride=2, padding=1),       # 6,6\n",
+    "            nonorm_Conv2d(512, 512, kernel_size=3, stride=1, padding=1)),\n",
+    "\n",
+    "            nn.Sequential(nonorm_Conv2d(512, 512, kernel_size=3, stride=2, padding=1),     # 3,3\n",
+    "            nonorm_Conv2d(512, 512, kernel_size=3, stride=1, padding=1),),\n",
+    "            \n",
+    "            nn.Sequential(nonorm_Conv2d(512, 512, kernel_size=3, stride=1, padding=0),     # 1, 1\n",
+    "            nonorm_Conv2d(512, 512, kernel_size=1, stride=1, padding=0)),])\n",
+    "\n",
+    "        self.binary_pred = nn.Sequential(nn.Conv2d(512, 1, kernel_size=1, stride=1, padding=0), nn.Sigmoid())\n",
+    "        self.label_noise = .0\n",
+    "\n",
+    "    def get_lower_half(self, face_sequences):\n",
+    "        return face_sequences[:, :, face_sequences.size(2)//2:]\n",
+    "\n",
+    "    def to_2d(self, face_sequences):\n",
+    "        B = face_sequences.size(0)\n",
+    "        face_sequences = torch.cat([face_sequences[:, :, i] for i in range(face_sequences.size(2))], dim=0)\n",
+    "        return face_sequences\n",
+    "\n",
+    "    def perceptual_forward(self, false_face_sequences):\n",
+    "        false_face_sequences = self.to_2d(false_face_sequences)\n",
+    "        false_face_sequences = self.get_lower_half(false_face_sequences)\n",
+    "\n",
+    "        false_feats = false_face_sequences\n",
+    "        for f in self.face_encoder_blocks:\n",
+    "            false_feats = f(false_feats)\n",
+    "\n",
+    "        false_pred_loss = F.binary_cross_entropy(self.binary_pred(false_feats).view(len(false_feats), -1), \n",
+    "                                        torch.ones((len(false_feats), 1)).cuda())\n",
+    "\n",
+    "        return false_pred_loss\n",
+    "\n",
+    "    def forward(self, face_sequences):\n",
+    "        face_sequences = self.to_2d(face_sequences)\n",
+    "        face_sequences = self.get_lower_half(face_sequences)\n",
+    "\n",
+    "        x = face_sequences\n",
+    "        for f in self.face_encoder_blocks:\n",
+    "            x = f(x)\n",
+    "\n",
+    "        return self.binary_pred(x).view(len(x), -1)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "d328e6c2",
+   "metadata": {
+    "papermill": {
+     "duration": 13.249585,
+     "end_time": "2024-10-31T10:32:13.935113",
+     "exception": false,
+     "start_time": "2024-10-31T10:32:00.685528",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "source": [
+    "#### 3.3.2 Definition of data set\n",
+    "During training, 4 data will be used:\n",
+    "1. x: Input picture\n",
+    "2. indiv_mels: mel-spectrogram features of the speech corresponding to each picture\n",
+    "3. mel: 200ms speech mel-spectrogram corresponding to all frames, used for SyncNet to calculate lip synchronization loss\n",
+    "4. y: Real pictures corresponding to speech and lip synchronization."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 18,
+   "id": "8bbac821",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-10-31T10:32:40.289184Z",
+     "iopub.status.busy": "2024-10-31T10:32:40.288361Z",
+     "iopub.status.idle": "2024-10-31T10:32:40.291719Z",
+     "shell.execute_reply": "2024-10-31T10:32:40.292221Z",
+     "shell.execute_reply.started": "2021-07-25T08:00:11.621386Z"
+    },
+    "papermill": {
+     "duration": 13.140704,
+     "end_time": "2024-10-31T10:32:40.292384",
+     "exception": false,
+     "start_time": "2024-10-31T10:32:27.151680",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "use_cuda: True\n"
+     ]
+    }
+   ],
+   "source": [
+    "global_step = 0\n",
+    "global_epoch = 0\n",
+    "use_cuda = torch.cuda.is_available()\n",
+    "print('use_cuda: {}'.format(use_cuda))\n",
+    "\n",
+    "syncnet_T = 5\n",
+    "syncnet_mel_step_size = 16\n",
+    "\n",
+    "class Dataset(object):\n",
+    "    def __init__(self, split):\n",
+    "        self.all_videos = get_image_list(data_root, split)\n",
+    "\n",
+    "    def get_frame_id(self, frame):\n",
+    "        return int(basename(frame).split('.')[0])\n",
+    "\n",
+    "    def get_window(self, start_frame):\n",
+    "        start_id = self.get_frame_id(start_frame)\n",
+    "        vidname = dirname(start_frame)\n",
+    "\n",
+    "        window_fnames = []\n",
+    "        for frame_id in range(start_id, start_id + syncnet_T):\n",
+    "            frame = join(vidname, '{}.jpg'.format(frame_id))\n",
+    "            if not isfile(frame):\n",
+    "                return None\n",
+    "            window_fnames.append(frame)\n",
+    "        return window_fnames\n",
+    "\n",
+    "    def read_window(self, window_fnames):\n",
+    "        if window_fnames is None: return None\n",
+    "        window = []\n",
+    "        for fname in window_fnames:\n",
+    "            img = cv2.imread(fname)\n",
+    "            if img is None:\n",
+    "                return None\n",
+    "            try:\n",
+    "                img = cv2.resize(img, (hparams.img_size, hparams.img_size))\n",
+    "            except Exception as e:\n",
+    "                return None\n",
+    "\n",
+    "            window.append(img)\n",
+    "\n",
+    "        return window\n",
+    "\n",
+    "    def crop_audio_window(self, spec, start_frame):\n",
+    "        if type(start_frame) == int:\n",
+    "            start_frame_num = start_frame\n",
+    "        else:\n",
+    "            start_frame_num = self.get_frame_id(start_frame) # 0-indexing ---> 1-indexing\n",
+    "        start_idx = int(80. * (start_frame_num / float(hparams.fps)))\n",
+    "        \n",
+    "        end_idx = start_idx + syncnet_mel_step_size\n",
+    "\n",
+    "        return spec[start_idx : end_idx, :]\n",
+    "\n",
+    "    def get_segmented_mels(self, spec, start_frame):\n",
+    "        mels = []\n",
+    "        assert syncnet_T == 5\n",
+    "        start_frame_num = self.get_frame_id(start_frame) + 1 # 0-indexing ---> 1-indexing\n",
+    "        if start_frame_num - 2 < 0: return None\n",
+    "        for i in range(start_frame_num, start_frame_num + syncnet_T):\n",
+    "            m = self.crop_audio_window(spec, i - 2)\n",
+    "            if m.shape[0] != syncnet_mel_step_size:\n",
+    "                return None\n",
+    "            mels.append(m.T)\n",
+    "\n",
+    "        mels = np.asarray(mels)\n",
+    "\n",
+    "        return mels\n",
+    "\n",
+    "    def prepare_window(self, window):\n",
+    "        # 3 x T x H x W\n",
+    "        x = np.asarray(window) / 255.\n",
+    "        x = np.transpose(x, (3, 0, 1, 2))\n",
+    "\n",
+    "        return x\n",
+    "\n",
+    "    def __len__(self):\n",
+    "        return len(self.all_videos)\n",
+    "\n",
+    "    def __getitem__(self, idx):\n",
+    "        while 1:\n",
+    "            idx = random.randint(0, len(self.all_videos) - 1) #Randomly select a video id\n",
+    "            vidname = self.all_videos[idx]\n",
+    "            img_names = list(glob(join(vidname, '*.jpg')))\n",
+    "            if len(img_names) <= 3 * syncnet_T:\n",
+    "                continue\n",
+    "            \n",
+    "            img_name = random.choice(img_names)\n",
+    "            wrong_img_name = random.choice(img_names)#Randomly select frames\n",
+    "            while wrong_img_name == img_name:\n",
+    "                wrong_img_name = random.choice(img_names)\n",
+    "\n",
+    "            window_fnames = self.get_window(img_name)\n",
+    "            wrong_window_fnames = self.get_window(wrong_img_name)\n",
+    "            if window_fnames is None or wrong_window_fnames is None:\n",
+    "                continue\n",
+    "\n",
+    "            window = self.read_window(window_fnames)\n",
+    "            if window is None:\n",
+    "                continue\n",
+    "\n",
+    "            wrong_window = self.read_window(wrong_window_fnames)\n",
+    "            if wrong_window is None:\n",
+    "                continue\n",
+    "\n",
+    "            try:\n",
+    "                #Read audio\n",
+    "                wavpath = join(vidname, \"audio.wav\")\n",
+    "                wav = audio.load_wav(wavpath, hparams.sample_rate)\n",
+    "                #Extract the complete mel-spectrogram\n",
+    "                orig_mel = audio.melspectrogram(wav).T\n",
+    "            except Exception as e:\n",
+    "                continue\n",
+    "            # Split mel-spectrogram\n",
+    "            mel = self.crop_audio_window(orig_mel.copy(), img_name)\n",
+    "            \n",
+    "            if (mel.shape[0] != syncnet_mel_step_size):\n",
+    "                continue\n",
+    "\n",
+    "            indiv_mels = self.get_segmented_mels(orig_mel.copy(), img_name)\n",
+    "            if indiv_mels is None: continue\n",
+    "\n",
+    "            window = self.prepare_window(window)\n",
+    "            y = window.copy()\n",
+    "            window[:, :, window.shape[2]//2:] = 0.\n",
+    "\n",
+    "            wrong_window = self.prepare_window(wrong_window)\n",
+    "            x = np.concatenate([window, wrong_window], axis=0)\n",
+    "\n",
+    "            x = torch.FloatTensor(x)\n",
+    "            mel = torch.FloatTensor(mel.T).unsqueeze(0)\n",
+    "            indiv_mels = torch.FloatTensor(indiv_mels).unsqueeze(1)\n",
+    "            y = torch.FloatTensor(y)\n",
+    "            return x, indiv_mels, mel, y"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 19,
+   "id": "ed3aa58c",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-10-31T10:33:06.502446Z",
+     "iopub.status.busy": "2024-10-31T10:33:06.501831Z",
+     "iopub.status.idle": "2024-10-31T10:33:06.767242Z",
+     "shell.execute_reply": "2024-10-31T10:33:06.768330Z",
+     "shell.execute_reply.started": "2021-07-25T08:00:15.736819Z"
+    },
+    "papermill": {
+     "duration": 13.431841,
+     "end_time": "2024-10-31T10:33:06.768540",
+     "exception": false,
+     "start_time": "2024-10-31T10:32:53.336699",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "torch.Size([6, 5, 96, 96])\n",
+      "torch.Size([5, 1, 80, 16])\n",
+      "torch.Size([1, 80, 16])\n",
+      "torch.Size([3, 5, 96, 96])\n"
+     ]
+    }
+   ],
+   "source": [
+    "ds=Dataset(\"train\")\n",
+    "x, indiv_mels, mel, y=ds[0]\n",
+    "print(x.shape)\n",
+    "print(indiv_mels.shape)\n",
+    "print(mel.shape)\n",
+    "print(y.shape)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "4ed57437",
+   "metadata": {
+    "papermill": {
+     "duration": 13.082101,
+     "end_time": "2024-10-31T10:33:33.067174",
+     "exception": false,
+     "start_time": "2024-10-31T10:33:19.985073",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "source": [
+    "#### 3.3.3 Training"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 20,
+   "id": "9c859516",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-10-31T10:33:59.343063Z",
+     "iopub.status.busy": "2024-10-31T10:33:59.321279Z",
+     "iopub.status.idle": "2024-10-31T10:33:59.508963Z",
+     "shell.execute_reply": "2024-10-31T10:33:59.508339Z",
+     "shell.execute_reply.started": "2021-07-25T08:00:17.791703Z"
+    },
+    "papermill": {
+     "duration": 13.37605,
+     "end_time": "2024-10-31T10:33:59.509100",
+     "exception": false,
+     "start_time": "2024-10-31T10:33:46.133050",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "#bce Cross Entropy\n",
+    "logloss = nn.BCELoss()\n",
+    "def cosine_loss(a, v, y):\n",
+    "    d = nn.functional.cosine_similarity(a, v)\n",
+    "    loss = logloss(d.unsqueeze(1), y)\n",
+    "\n",
+    "    return loss\n",
+    "\n",
+    "device = torch.device(\"cuda\" if use_cuda else \"cpu\")\n",
+    "syncnet = SyncNet().to(device) #Define syncnet model\n",
+    "for p in syncnet.parameters():\n",
+    "    p.requires_grad = False\n",
+    "\n",
+    "    \n",
+    "#####L1 loss    \n",
+    "recon_loss = nn.L1Loss()\n",
+    "def get_sync_loss(mel, g):\n",
+    "    g = g[:, :, :, g.size(3)//2:]\n",
+    "    g = torch.cat([g[:, :, i] for i in range(syncnet_T)], dim=1)\n",
+    "    # B, 3 * T, H//2, W\n",
+    "    a, v = syncnet(mel, g)\n",
+    "    y = torch.ones(g.size(0), 1).float().to(device)\n",
+    "    return cosine_loss(a, v, y)\n",
+    "\n",
+    "def train(device, model, disc, train_data_loader, test_data_loader, optimizer, disc_optimizer,\n",
+    "          checkpoint_dir=None, checkpoint_interval=None, nepochs=None):\n",
+    "    global global_step, global_epoch\n",
+    "    resumed_step = global_step\n",
+    "\n",
+    "    while global_epoch < nepochs:\n",
+    "        print('Starting Epoch: {}'.format(global_epoch))\n",
+    "        running_sync_loss, running_l1_loss, disc_loss, running_perceptual_loss = 0., 0., 0., 0.\n",
+    "        running_disc_real_loss, running_disc_fake_loss = 0., 0.\n",
+    "        prog_bar = tqdm(enumerate(train_data_loader))\n",
+    "        for step, (x, indiv_mels, mel, gt) in prog_bar:\n",
+    "            disc.train()\n",
+    "            model.train()\n",
+    "\n",
+    "            x = x.to(device)\n",
+    "            mel = mel.to(device)\n",
+    "            indiv_mels = indiv_mels.to(device)\n",
+    "            gt = gt.to(device)\n",
+    "\n",
+    "            ### Train generator now. Remove ALL grads. \n",
+    "            #Training generator\n",
+    "            optimizer.zero_grad()\n",
+    "            disc_optimizer.zero_grad()\n",
+    "\n",
+    "            g = model(indiv_mels, x)#Get the generated results\n",
+    "\n",
+    "            if hparams.syncnet_wt > 0.:\n",
+    "                sync_loss = get_sync_loss(mel, g)# Obtain the lip synchronization loss from the pre-trained expert model\n",
+    "            else:\n",
+    "                sync_loss = 0.\n",
+    "\n",
+    "            if hparams.disc_wt > 0.:\n",
+    "                perceptual_loss = disc.perceptual_forward(g)#Perceptual loss of the discriminator\n",
+    "            else:\n",
+    "                perceptual_loss = 0.\n",
+    "\n",
+    "            l1loss = recon_loss(g, gt)#l1 loss, reconstruction loss\n",
+    "            \n",
+    "            #Final loss function\n",
+    "            loss = hparams.syncnet_wt * sync_loss + hparams.disc_wt * perceptual_loss + \\\n",
+    "                                    (1. - hparams.syncnet_wt - hparams.disc_wt) * l1loss\n",
+    "\n",
+    "            loss.backward()\n",
+    "            optimizer.step()\n",
+    "\n",
+    "            ### Remove all gradients before Training disc\n",
+    "            # Train the discriminator\n",
+    "            disc_optimizer.zero_grad()\n",
+    "\n",
+    "            pred = disc(gt)\n",
+    "            disc_real_loss = F.binary_cross_entropy(pred, torch.ones((len(pred), 1)).to(device))\n",
+    "            disc_real_loss.backward()\n",
+    "\n",
+    "            pred = disc(g.detach())\n",
+    "            disc_fake_loss = F.binary_cross_entropy(pred, torch.zeros((len(pred), 1)).to(device))\n",
+    "            disc_fake_loss.backward()\n",
+    "\n",
+    "            disc_optimizer.step()\n",
+    "\n",
+    "            running_disc_real_loss += disc_real_loss.item()\n",
+    "            running_disc_fake_loss += disc_fake_loss.item()\n",
+    "\n",
+    "            # Logs\n",
+    "            global_step += 1\n",
+    "            cur_session_steps = global_step - resumed_step\n",
+    "\n",
+    "            running_l1_loss += l1loss.item()\n",
+    "            if hparams.syncnet_wt > 0.:\n",
+    "                running_sync_loss += sync_loss.item()\n",
+    "            else:\n",
+    "                running_sync_loss += 0.\n",
+    "\n",
+    "            if hparams.disc_wt > 0.:\n",
+    "                running_perceptual_loss += perceptual_loss.item()\n",
+    "            else:\n",
+    "                running_perceptual_loss += 0.\n",
+    "\n",
+    "            if global_step == 1 or global_step % checkpoint_interval == 0:\n",
+    "                save_checkpoint(\n",
+    "                    model, optimizer, global_step, checkpoint_dir, global_epoch)\n",
+    "                save_checkpoint(disc, disc_optimizer, global_step, checkpoint_dir, global_epoch, prefix='disc_')\n",
+    "\n",
+    "\n",
+    "            if global_step % hparams.eval_interval == 0:\n",
+    "                with torch.no_grad():\n",
+    "                    average_sync_loss = eval_model(test_data_loader, global_step, device, model, disc)\n",
+    "\n",
+    "                    if average_sync_loss < .75:\n",
+    "                        hparams.set_hparam('syncnet_wt', 0.03)\n",
+    "\n",
+    "            prog_bar.set_description('L1: {}, Sync: {}, Percep: {} | Fake: {}, Real: {}'.format(running_l1_loss / (step + 1),\n",
+    "                                                                                        running_sync_loss / (step + 1),\n",
+    "                                                                                        running_perceptual_loss / (step + 1),\n",
+    "                                                                                        running_disc_fake_loss / (step + 1),\n",
+    "                                                                                        running_disc_real_loss / (step + 1)))\n",
+    "\n",
+    "        global_epoch += 1\n",
+    "\n",
+    "def eval_model(test_data_loader, global_step, device, model, disc):\n",
+    "    eval_steps = 300\n",
+    "    print('Evaluating for {} steps'.format(eval_steps))\n",
+    "    running_sync_loss, running_l1_loss, running_disc_real_loss, running_disc_fake_loss, running_perceptual_loss = [], [], [], [], []\n",
+    "    while 1:\n",
+    "        for step, (x, indiv_mels, mel, gt) in enumerate((test_data_loader)):\n",
+    "            model.eval()\n",
+    "            disc.eval()\n",
+    "\n",
+    "            x = x.to(device)\n",
+    "            mel = mel.to(device)\n",
+    "            indiv_mels = indiv_mels.to(device)\n",
+    "            gt = gt.to(device)\n",
+    "\n",
+    "            pred = disc(gt)\n",
+    "            disc_real_loss = F.binary_cross_entropy(pred, torch.ones((len(pred), 1)).to(device))\n",
+    "\n",
+    "            g = model(indiv_mels, x)\n",
+    "            pred = disc(g)\n",
+    "            disc_fake_loss = F.binary_cross_entropy(pred, torch.zeros((len(pred), 1)).to(device))\n",
+    "\n",
+    "            running_disc_real_loss.append(disc_real_loss.item())\n",
+    "            running_disc_fake_loss.append(disc_fake_loss.item())\n",
+    "\n",
+    "            sync_loss = get_sync_loss(mel, g)\n",
+    "            \n",
+    "            if hparams.disc_wt > 0.:\n",
+    "                perceptual_loss = disc.perceptual_forward(g)\n",
+    "            else:\n",
+    "                perceptual_loss = 0.\n",
+    "\n",
+    "            l1loss = recon_loss(g, gt)\n",
+    "\n",
+    "            loss = hparams.syncnet_wt * sync_loss + hparams.disc_wt * perceptual_loss + \\\n",
+    "                                    (1. - hparams.syncnet_wt - hparams.disc_wt) * l1loss\n",
+    "\n",
+    "            running_l1_loss.append(l1loss.item())\n",
+    "            running_sync_loss.append(sync_loss.item())\n",
+    "            \n",
+    "            if hparams.disc_wt > 0.:\n",
+    "                running_perceptual_loss.append(perceptual_loss.item())\n",
+    "            else:\n",
+    "                running_perceptual_loss.append(0.)\n",
+    "\n",
+    "            if step > eval_steps: break\n",
+    "\n",
+    "        print('L1: {}, Sync: {}, Percep: {} | Fake: {}, Real: {}'.format(sum(running_l1_loss) / len(running_l1_loss),\n",
+    "                                                            sum(running_sync_loss) / len(running_sync_loss),\n",
+    "                                                            sum(running_perceptual_loss) / len(running_perceptual_loss),\n",
+    "                                                            sum(running_disc_fake_loss) / len(running_disc_fake_loss),\n",
+    "                                                             sum(running_disc_real_loss) / len(running_disc_real_loss)))\n",
+    "        return sum(running_sync_loss) / len(running_sync_loss)\n",
+    "\n",
+    "latest_wav2lip_checkpoint = ''\n",
+    "def save_checkpoint(model, optimizer, step, checkpoint_dir, epoch, prefix=''):\n",
+    "    global latest_wav2lip_checkpoint\n",
+    "    checkpoint_path = join(\n",
+    "        checkpoint_dir, \"{}checkpoint_step{:09d}.pth\".format(prefix, global_step))\n",
+    "    if 'disc' not in checkpoint_path:\n",
+    "        latest_wav2lip_checkpoint = checkpoint_path\n",
+    "    optimizer_state = optimizer.state_dict() if hparams.save_optimizer_state else None\n",
+    "    torch.save({\n",
+    "        \"state_dict\": model.state_dict(),\n",
+    "        \"optimizer\": optimizer_state,\n",
+    "        \"global_step\": step,\n",
+    "        \"global_epoch\": epoch,\n",
+    "    }, checkpoint_path)\n",
+    "    print(\"Saved checkpoint:\", checkpoint_path)\n",
+    "\n",
+    "def _load(checkpoint_path):\n",
+    "    if use_cuda:\n",
+    "        checkpoint = torch.load(checkpoint_path)\n",
+    "    else:\n",
+    "        checkpoint = torch.load(checkpoint_path,\n",
+    "                                map_location=lambda storage, loc: storage)\n",
+    "    return checkpoint\n",
+    "\n",
+    "\n",
+    "def load_checkpoint(path, model, optimizer, reset_optimizer=False, overwrite_global_states=True):\n",
+    "    global global_step\n",
+    "    global global_epoch\n",
+    "\n",
+    "    print(\"Load checkpoint from: {}\".format(path))\n",
+    "    checkpoint = _load(path)\n",
+    "    s = checkpoint[\"state_dict\"]\n",
+    "    new_s = {}\n",
+    "    for k, v in s.items():\n",
+    "        new_s[k.replace('module.', '')] = v\n",
+    "    model.load_state_dict(new_s)\n",
+    "    if not reset_optimizer:\n",
+    "        optimizer_state = checkpoint[\"optimizer\"]\n",
+    "        if optimizer_state is not None:\n",
+    "            print(\"Load optimizer state from {}\".format(path))\n",
+    "            optimizer.load_state_dict(checkpoint[\"optimizer\"])\n",
+    "    if overwrite_global_states:\n",
+    "        global_step = checkpoint[\"global_step\"]\n",
+    "        global_epoch = checkpoint[\"global_epoch\"]\n",
+    "\n",
+    "    return model"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 21,
+   "id": "5e6f0c5a",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-10-31T10:34:25.660929Z",
+     "iopub.status.busy": "2024-10-31T10:34:25.659996Z",
+     "iopub.status.idle": "2024-10-31T15:29:15.438057Z",
+     "shell.execute_reply": "2024-10-31T15:29:15.437380Z",
+     "shell.execute_reply.started": "2021-07-25T08:01:08.453052Z"
+    },
+    "papermill": {
+     "duration": 17702.85683,
+     "end_time": "2024-10-31T15:29:15.438215",
+     "exception": false,
+     "start_time": "2024-10-31T10:34:12.581385",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "total trainable params 36298035\n",
+      "total DISC trainable params 14113793\n",
+      "Load checkpoint from: /kaggle/working/expert_checkpoints/checkpoint_step000080000.pth\n",
+      "Starting Epoch: 0\n"
+     ]
+    },
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "0it [00:00, ?it/s]"
+     ]
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Saved checkpoint: /kaggle/working/wav2lip_checkpoints/checkpoint_step000000001.pth\n"
+     ]
+    },
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "L1: 0.17785879969596863, Sync: 0.0, Percep: 0.674405574798584 | Fake: 0.7122467756271362, Real: 0.6744054555892944: : 1it [00:14, 14.78s/it]"
+     ]
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Saved checkpoint: /kaggle/working/wav2lip_checkpoints/disc_checkpoint_step000000001.pth\n"
+     ]
+    },
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "L1: 0.04380322559289699, Sync: 0.0, Percep: 0.007973609107951219 | Fake: 98.9946697362788, Real: 0.007327617650256731: : 2865it [58:00,  1.21s/it]"
+     ]
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Starting Epoch: 1\n"
+     ]
+    },
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "\n",
+      "L1: 0.03812103558665336, Sync: 0.0, Percep: 0.0 | Fake: 100.0, Real: 0.0: : 134it [02:53,  1.19s/it]"
+     ]
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Saved checkpoint: /kaggle/working/wav2lip_checkpoints/checkpoint_step000003000.pth\n",
+      "Saved checkpoint: /kaggle/working/wav2lip_checkpoints/disc_checkpoint_step000003000.pth\n",
+      "Evaluating for 300 steps\n"
+     ]
+    },
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "L1: 0.038066266007997375, Sync: 0.0, Percep: 0.0 | Fake: 100.0, Real: 0.0: : 135it [03:36, 13.72s/it]"
+     ]
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "L1: 0.03235137517399648, Sync: 0.9003606061725056, Percep: 0.0 | Fake: 100.0, Real: 0.0\n"
+     ]
+    },
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "L1: 0.0363935572197612, Sync: 0.0, Percep: 0.0 | Fake: 100.0, Real: 0.0: : 2865it [58:26,  1.22s/it]\n"
+     ]
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Starting Epoch: 2\n"
+     ]
+    },
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "L1: 0.03490750668881994, Sync: 0.0, Percep: 0.0 | Fake: 100.0, Real: 0.0: : 269it [05:34,  1.20s/it]"
+     ]
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Saved checkpoint: /kaggle/working/wav2lip_checkpoints/checkpoint_step000006000.pth\n",
+      "Saved checkpoint: /kaggle/working/wav2lip_checkpoints/disc_checkpoint_step000006000.pth\n",
+      "Evaluating for 300 steps\n"
+     ]
+    },
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "L1: 0.034903241831947256, Sync: 0.0, Percep: 0.0 | Fake: 100.0, Real: 0.0: : 270it [06:16, 13.58s/it]"
+     ]
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "L1: 0.0318494155893431, Sync: 0.7836025046075091, Percep: 0.0 | Fake: 100.0, Real: 0.0\n"
+     ]
+    },
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "L1: 0.03417859081549482, Sync: 0.0, Percep: 0.0 | Fake: 100.0, Real: 0.0: : 2865it [58:19,  1.22s/it]"
+     ]
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Starting Epoch: 3\n"
+     ]
+    },
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "\n",
+      "L1: 0.033151514754436985, Sync: 0.0, Percep: 0.0 | Fake: 100.0, Real: 0.0: : 404it [08:18,  1.19s/it]"
+     ]
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Saved checkpoint: /kaggle/working/wav2lip_checkpoints/checkpoint_step000009000.pth\n",
+      "Saved checkpoint: /kaggle/working/wav2lip_checkpoints/disc_checkpoint_step000009000.pth\n",
+      "Evaluating for 300 steps\n"
+     ]
+    },
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "L1: 0.03313914563644815, Sync: 0.0, Percep: 0.0 | Fake: 100.0, Real: 0.0: : 405it [09:03, 14.41s/it]"
+     ]
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "L1: 0.026806788546416688, Sync: 0.6655615699641845, Percep: 0.0 | Fake: 100.0, Real: 0.0\n"
+     ]
+    },
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "L1: 0.03347329240987958, Sync: 0.1670515916604438, Percep: 0.0 | Fake: 100.0, Real: 0.0: : 2865it [59:56,  1.26s/it]"
+     ]
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Starting Epoch: 4\n"
+     ]
+    },
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "\n",
+      "L1: 0.03273164973367897, Sync: 0.16957638866107405, Percep: 0.0 | Fake: 100.0, Real: 0.0: : 539it [11:19,  1.25s/it]"
+     ]
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Saved checkpoint: /kaggle/working/wav2lip_checkpoints/checkpoint_step000012000.pth\n",
+      "Saved checkpoint: /kaggle/working/wav2lip_checkpoints/disc_checkpoint_step000012000.pth\n",
+      "Evaluating for 300 steps\n"
+     ]
+    },
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "L1: 0.03273051626359423, Sync: 0.1696748599823978, Percep: 0.0 | Fake: 100.0, Real: 0.0: : 540it [12:03, 14.02s/it]"
+     ]
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "L1: 0.026331134003532285, Sync: 0.17011118570671363, Percep: 0.0 | Fake: 100.0, Real: 0.0\n"
+     ]
+    },
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "L1: 0.03205385825630882, Sync: 0.16464668452271616, Percep: 0.0 | Fake: 100.0, Real: 0.0: : 2865it [1:00:04,  1.26s/it]\n"
+     ]
+    }
+   ],
+   "source": [
+    "checkpoint_dir = \"/kaggle/working/wav2lip_checkpoints\"  #checkpoint Stored location\n",
+    "\n",
+    "# Dataset and Dataloader setup\n",
+    "train_dataset = Dataset('train')\n",
+    "test_dataset = Dataset('val')\n",
+    "\n",
+    "train_data_loader = data_utils.DataLoader(\n",
+    "    train_dataset, batch_size=hparams.batch_size, shuffle=True,\n",
+    "    num_workers=hparams.num_workers)\n",
+    "\n",
+    "test_data_loader = data_utils.DataLoader(\n",
+    "    test_dataset, batch_size=hparams.batch_size,\n",
+    "    num_workers=4)\n",
+    "device = torch.device(\"cuda\" if use_cuda else \"cpu\")\n",
+    "\n",
+    " # Model\n",
+    "model = Wav2Lip().to(device)####### generator model\n",
+    "disc = Wav2Lip_disc_qual().to(device)####### discriminator model\n",
+    "\n",
+    "print('total trainable params {}'.format(sum(p.numel() for p in model.parameters() if p.requires_grad)))\n",
+    "print('total DISC trainable params {}'.format(sum(p.numel() for p in disc.parameters() if p.requires_grad)))\n",
+    "\n",
+    "optimizer = optim.Adam([p for p in model.parameters() if p.requires_grad],\n",
+    "                       lr=hparams.initial_learning_rate,\n",
+    "                       betas=(0.5, 0.999))#####adam optimizer，betas=[0.5,0.999]\n",
+    "disc_optimizer = optim.Adam([p for p in disc.parameters() if p.requires_grad],\n",
+    "                            lr=hparams.disc_initial_learning_rate,\n",
+    "                            betas=(0.5, 0.999))#####adam optimizer，betas=[0.5,0.999]\n",
+    "\n",
+    "#The checkpoint position of the generator that continues training\n",
+    "# checkpoint_path=\"\"\n",
+    "# load_checkpoint(checkpoint_path, model, optimizer, reset_optimizer=False)\n",
+    "#The checkpoint position of the discriminator that continues training\n",
+    "# disc_checkpoint_path=\"\"\n",
+    "# load_checkpoint(disc_checkpoint_path, disc, disc_optimizer, \n",
+    "#                             reset_optimizer=False, overwrite_global_states=False)\n",
+    "\n",
+    "# The checkpoint position of syncnet, we will use this model to calculate the lip synchronization loss of the generated frames and speech\n",
+    "syncnet_checkpoint_path = latest_checkpoint_path\n",
+    "# syncnet_checkpoint_path=\"/kaggle/working/expert_checkpoints/checkpoint_step000000001.pth\"\n",
+    "load_checkpoint(syncnet_checkpoint_path, syncnet, None, reset_optimizer=True,\n",
+    "                            overwrite_global_states=False)\n",
+    "\n",
+    "if not os.path.exists(checkpoint_dir):\n",
+    "    os.mkdir(checkpoint_dir)\n",
+    "\n",
+    "# Train!\n",
+    "train(device, model, disc, train_data_loader, test_data_loader, optimizer, disc_optimizer,\n",
+    "          checkpoint_dir=checkpoint_dir,\n",
+    "          checkpoint_interval=hparams.checkpoint_interval,\n",
+    "          nepochs=5)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "ab6c023d",
+   "metadata": {
+    "papermill": {
+     "duration": 22.318527,
+     "end_time": "2024-10-31T15:30:00.206360",
+     "exception": false,
+     "start_time": "2024-10-31T15:29:37.887833",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "source": [
+    "#### 3.3.4 Command line training\n",
+    "The above is the step-by-step training process. The above process has been encapsulated in the `hq_wav2lip_train.py` file. You can directly train through the following command"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 22,
+   "id": "d1b28213",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-10-31T15:30:44.728410Z",
+     "iopub.status.busy": "2024-10-31T15:30:44.727439Z",
+     "iopub.status.idle": "2024-10-31T15:30:44.730315Z",
+     "shell.execute_reply": "2024-10-31T15:30:44.729668Z"
+    },
+    "papermill": {
+     "duration": 22.353717,
+     "end_time": "2024-10-31T15:30:44.730451",
+     "exception": false,
+     "start_time": "2024-10-31T15:30:22.376734",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "# !python wav2lip_train.py --data_root lrs2_preprocessed/ --checkpoint_dir <folder_to_save_checkpoints> --syncnet_checkpoint_path <path_to_expert_disc_checkpoint>"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "82e2577a",
+   "metadata": {
+    "papermill": {
+     "duration": 22.187786,
+     "end_time": "2024-10-31T15:31:29.180073",
+     "exception": false,
+     "start_time": "2024-10-31T15:31:06.992287",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "source": [
+    "### 4. Model inference\n",
+    "After the model is trained, we only use the network model part of the generator as our inference model. The input to the model consists of a reference video containing a human face and a speech segment.  \n",
+    "Here we can directly use the pre-trained model **[weight](https://iiitaphyd-my.sharepoint.com/:u:/g/personal/radrabha_m_research_iiit_ac_in/EdjI7bZlgApMqsVoEUUXpLsBxqXbn5z8VTmoxp55YNDcIA?e=n9ljGW)** to download the model and Place it in the designated folder for subsequent reasoning.  \n",
+    "The inference process of the model is mainly divided into the following steps:\n",
+    "1. Preprocessing of input data, including face cutout, video frame splitting, mel-spectrogram feature extraction and other operations.\n",
+    "2. Use the network model to generate lip synchronized video frames.\n",
+    "3. Convert the generated video frame to video and combine it with the input voice to form the final output video."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 23,
+   "id": "6c42a039",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-10-31T15:32:13.631572Z",
+     "iopub.status.busy": "2024-10-31T15:32:13.630747Z",
+     "iopub.status.idle": "2024-10-31T15:32:13.685881Z",
+     "shell.execute_reply": "2024-10-31T15:32:13.685390Z",
+     "shell.execute_reply.started": "2021-07-24T13:57:11.710238Z"
+    },
+    "papermill": {
+     "duration": 22.392865,
+     "end_time": "2024-10-31T15:32:13.686052",
+     "exception": false,
+     "start_time": "2024-10-31T15:31:51.293187",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "from os import listdir, path\n",
+    "import numpy as np\n",
+    "import scipy, cv2, os, sys, argparse, audio\n",
+    "import json, subprocess, random, string\n",
+    "from tqdm import tqdm\n",
+    "from glob import glob\n",
+    "import torch, face_detection\n",
+    "from models import Wav2Lip\n",
+    "import platform\n",
+    "import audio"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 24,
+   "id": "8733df67",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-10-31T15:32:58.226564Z",
+     "iopub.status.busy": "2024-10-31T15:32:58.225931Z",
+     "iopub.status.idle": "2024-10-31T15:32:58.228865Z",
+     "shell.execute_reply": "2024-10-31T15:32:58.228261Z",
+     "shell.execute_reply.started": "2021-07-24T13:59:02.638662Z"
+    },
+    "papermill": {
+     "duration": 22.170558,
+     "end_time": "2024-10-31T15:32:58.229006",
+     "exception": false,
+     "start_time": "2024-10-31T15:32:36.058448",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "checkpoint_path=\"/kaggle/working/wav2lip_checkpoints/checkpoint_step000000001.pth\"#Checkpoint location of the generator\n",
+    "checkpoint_path = latest_wav2lip_checkpoint\n",
+    "face=\"input_video.mp4\" #Refer to the file location of the video, *.mp4\n",
+    "speech=\"input_audio.wav\"#Input the position of the speech, *.wav\n",
+    "resize_factor=1 #The ratio of downsampling the input video\n",
+    "crop=[0,-1,0,-1] #Whether to crop the video frame, useful when processing multiple faces in the video\n",
+    "fps=25#Video frame rate\n",
+    "static=False #Whether to use only a fixed frame as a reference for video generation"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 25,
+   "id": "3f38bcba",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-10-31T15:33:42.998133Z",
+     "iopub.status.busy": "2024-10-31T15:33:42.997471Z",
+     "iopub.status.idle": "2024-10-31T15:33:43.344036Z",
+     "shell.execute_reply": "2024-10-31T15:33:43.343403Z",
+     "shell.execute_reply.started": "2021-07-24T13:59:14.496913Z"
+    },
+    "papermill": {
+     "duration": 22.659888,
+     "end_time": "2024-10-31T15:33:43.344171",
+     "exception": false,
+     "start_time": "2024-10-31T15:33:20.684283",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Reading video frames...\n",
+      "Number of frames available for inference: 210\n"
+     ]
+    }
+   ],
+   "source": [
+    "if not os.path.isfile(face):\n",
+    "    raise ValueError('--face argument must be a valid path to video/image file')\n",
+    "\n",
+    "\n",
+    "else:# If the input is video format\n",
+    "    video_stream = cv2.VideoCapture(face)# Read video\n",
+    "    fps = video_stream.get(cv2.CAP_PROP_FPS)# Read fps\n",
+    "\n",
+    "    print('Reading video frames...')\n",
+    "\n",
+    "    full_frames = []\n",
+    "    #Extract all frames\n",
+    "    while 1:\n",
+    "        still_reading, frame = video_stream.read()\n",
+    "        if not still_reading:\n",
+    "            video_stream.release()\n",
+    "            break\n",
+    "        if resize_factor > 1: # Perform downsampling and reduce resolution\n",
+    "            frame = cv2.resize(frame, (frame.shape[1]//resize_factor, frame.shape[0]//resize_factor))\n",
+    "\n",
+    "        \n",
+    "\n",
+    "        y1, y2, x1, x2 =crop # Crop\n",
+    "        if x2 == -1: x2 = frame.shape[1]\n",
+    "        if y2 == -1: y2 = frame.shape[0]\n",
+    "\n",
+    "        frame = frame[y1:y2, x1:x2]\n",
+    "\n",
+    "        full_frames.append(frame)\n",
+    "\n",
+    "print (\"Number of frames available for inference: \"+str(len(full_frames)))"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 26,
+   "id": "7f8a0b8d",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-10-31T15:34:27.748151Z",
+     "iopub.status.busy": "2024-10-31T15:34:27.747539Z",
+     "iopub.status.idle": "2024-10-31T15:34:28.481890Z",
+     "shell.execute_reply": "2024-10-31T15:34:28.480890Z",
+     "shell.execute_reply.started": "2021-07-24T13:59:29.319841Z"
+    },
+    "papermill": {
+     "duration": 22.904007,
+     "end_time": "2024-10-31T15:34:28.482143",
+     "exception": false,
+     "start_time": "2024-10-31T15:34:05.578136",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "(80, 353)\n"
+     ]
+    }
+   ],
+   "source": [
+    "#Check whether the input audio is in .wav format, if not, convert it\n",
+    "if not speech.endswith('.wav'):\n",
+    "    print('Extracting raw audio...')\n",
+    "    command = 'ffmpeg -y -i {} -strict -2 {}'.format(speech, 'temp/temp.wav')\n",
+    "\n",
+    "    subprocess.call(command, shell=True)\n",
+    "    speech = 'temp/temp.wav'\n",
+    "\n",
+    "wav = audio.load_wav(speech, 16000)#Guaranteed sampling rate of 16000\n",
+    "mel = audio.melspectrogram(wav)\n",
+    "print(mel.shape)\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 27,
+   "id": "4c107f45",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-10-31T15:35:13.451977Z",
+     "iopub.status.busy": "2024-10-31T15:35:13.451107Z",
+     "iopub.status.idle": "2024-10-31T15:35:13.455121Z",
+     "shell.execute_reply": "2024-10-31T15:35:13.454594Z",
+     "shell.execute_reply.started": "2021-07-24T13:59:40.598345Z"
+    },
+    "papermill": {
+     "duration": 22.477965,
+     "end_time": "2024-10-31T15:35:13.455252",
+     "exception": false,
+     "start_time": "2024-10-31T15:34:50.977287",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Length of mel chunks: 128\n"
+     ]
+    }
+   ],
+   "source": [
+    "wav2lip_batch_size=128 #The batchsize input to the network during inference\n",
+    "mel_step_size=16\n",
+    "\n",
+    "#Extract mel spectrum of speech\n",
+    "mel_chunks = []\n",
+    "mel_idx_multiplier = 80./fps \n",
+    "i = 0\n",
+    "while 1:\n",
+    "    start_idx = int(i * mel_idx_multiplier)\n",
+    "    if start_idx + mel_step_size > len(mel[0]):\n",
+    "        mel_chunks.append(mel[:, len(mel[0]) - mel_step_size:])\n",
+    "        break\n",
+    "    mel_chunks.append(mel[:, start_idx : start_idx + mel_step_size])\n",
+    "    i += 1\n",
+    "\n",
+    "print(\"Length of mel chunks: {}\".format(len(mel_chunks)))\n",
+    "\n",
+    "full_frames = full_frames[:len(mel_chunks)]\n",
+    "\n",
+    "batch_size = wav2lip_batch_size"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 28,
+   "id": "df1293f4",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-10-31T15:35:57.914940Z",
+     "iopub.status.busy": "2024-10-31T15:35:57.909333Z",
+     "iopub.status.idle": "2024-10-31T15:35:57.918426Z",
+     "shell.execute_reply": "2024-10-31T15:35:57.917870Z",
+     "shell.execute_reply.started": "2021-07-24T13:59:59.813928Z"
+    },
+    "papermill": {
+     "duration": 22.34816,
+     "end_time": "2024-10-31T15:35:57.918557",
+     "exception": false,
+     "start_time": "2024-10-31T15:35:35.570397",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Using cuda for inference.\n"
+     ]
+    }
+   ],
+   "source": [
+    "img_size = 96 #Default input image size\n",
+    "pads=[0,20,0,0] # The length of the padding ensures that the chin is within the cutout range\n",
+    "nosmooth=False\n",
+    "face_det_batch_size=16\n",
+    "\n",
+    "def get_smoothened_boxes(boxes, T):\n",
+    "    for i in range(len(boxes)):\n",
+    "        if i + T > len(boxes):\n",
+    "            window = boxes[len(boxes) - T:]\n",
+    "        else:\n",
+    "            window = boxes[i : i + T]\n",
+    "        boxes[i] = np.mean(window, axis=0)\n",
+    "    return boxes\n",
+    "\n",
+    "#Face detection function\n",
+    "def face_detect(images):\n",
+    "    detector = face_detection.FaceAlignment(face_detection.LandmarksType._2D, \n",
+    "                                            flip_input=False, device=device)\n",
+    "\n",
+    "    batch_size = face_det_batch_size\n",
+    "\n",
+    "    while 1:\n",
+    "        predictions = []\n",
+    "        try:\n",
+    "            for i in tqdm(range(0, len(images), batch_size)):\n",
+    "                predictions.extend(detector.get_detections_for_batch(np.array(images[i:i + batch_size])))\n",
+    "        except RuntimeError:\n",
+    "            if batch_size == 1: \n",
+    "                raise RuntimeError('Image too big to run face detection on GPU. Please use the --resize_factor argument')\n",
+    "            batch_size //= 2\n",
+    "            print('Recovering from OOM error; New batch size: {}'.format(batch_size))\n",
+    "            continue\n",
+    "        break\n",
+    "\n",
+    "    results = []\n",
+    "    pady1, pady2, padx1, padx2 = pads\n",
+    "    for rect, image in zip(predictions, images):\n",
+    "        if rect is None:\n",
+    "            cv2.imwrite('temp/faulty_frame.jpg', image) # check this frame where the face was not detected.\n",
+    "            raise ValueError('Face not detected! Ensure the video contains a face in all the frames.')\n",
+    "\n",
+    "        y1 = max(0, rect[1] - pady1)\n",
+    "        y2 = min(image.shape[0], rect[3] + pady2)\n",
+    "        x1 = max(0, rect[0] - padx1)\n",
+    "        x2 = min(image.shape[1], rect[2] + padx2)\n",
+    "\n",
+    "        results.append([x1, y1, x2, y2])\n",
+    "\n",
+    "    boxes = np.array(results)\n",
+    "    if not nosmooth: boxes = get_smoothened_boxes(boxes, T=5)\n",
+    "    results = [[image[y1: y2, x1:x2], (y1, y2, x1, x2)] for image, (x1, y1, x2, y2) in zip(images, boxes)]\n",
+    "\n",
+    "    del detector\n",
+    "    return results \n",
+    "\n",
+    "box=[-1,-1,-1,-1]\n",
+    "\n",
+    "def datagen(frames, mels):\n",
+    "    img_batch, mel_batch, frame_batch, coords_batch = [], [], [], []\n",
+    "\n",
+    "    if box[0] == -1:# If no specific face boundaries are specified\n",
+    "        if not static:# Whether to use the first frame of the video as a reference\n",
+    "            face_det_results = face_detect(frames) # BGR2RGB for CNN face detection\n",
+    "        else:\n",
+    "            face_det_results = face_detect([frames[0]])\n",
+    "    else:\n",
+    "        print('Using the specified bounding box instead of face detection...')\n",
+    "        y1, y2, x1, x2 = box\n",
+    "        face_det_results = [[f[y1: y2, x1:x2], (y1, y2, x1, x2)] for f in frames] # Crop the face result\n",
+    "\n",
+    "    for i, m in enumerate(mels):\n",
+    "        idx = 0 if static else i%len(frames)\n",
+    "        frame_to_save = frames[idx].copy()\n",
+    "        face, coords = face_det_results[idx].copy()\n",
+    "\n",
+    "        face = cv2.resize(face, (img_size, img_size)) # Resample to specified size\n",
+    "\n",
+    "        img_batch.append(face)\n",
+    "        mel_batch.append(m)\n",
+    "        frame_batch.append(frame_to_save)\n",
+    "        coords_batch.append(coords)\n",
+    "\n",
+    "        if len(img_batch) >= wav2lip_batch_size:\n",
+    "            img_batch, mel_batch = np.asarray(img_batch), np.asarray(mel_batch)\n",
+    "\n",
+    "            img_masked = img_batch.copy()\n",
+    "            img_masked[:, img_size//2:] = 0\n",
+    "\n",
+    "            img_batch = np.concatenate((img_masked, img_batch), axis=3) / 255.\n",
+    "            mel_batch = np.reshape(mel_batch, [len(mel_batch), mel_batch.shape[1], mel_batch.shape[2], 1])\n",
+    "\n",
+    "            yield img_batch, mel_batch, frame_batch, coords_batch\n",
+    "            img_batch, mel_batch, frame_batch, coords_batch = [], [], [], []\n",
+    "\n",
+    "    if len(img_batch) > 0:\n",
+    "        img_batch, mel_batch = np.asarray(img_batch), np.asarray(mel_batch)\n",
+    "\n",
+    "        img_masked = img_batch.copy()\n",
+    "        img_masked[:, img_size//2:] = 0\n",
+    "\n",
+    "        img_batch = np.concatenate((img_masked, img_batch), axis=3) / 255.\n",
+    "        mel_batch = np.reshape(mel_batch, [len(mel_batch), mel_batch.shape[1], mel_batch.shape[2], 1])\n",
+    "\n",
+    "        yield img_batch, mel_batch, frame_batch, coords_batch\n",
+    "\n",
+    "mel_step_size = 16 \n",
+    "device = 'cuda' if torch.cuda.is_available() else 'cpu'\n",
+    "print('Using {} for inference.'.format(device))\n",
+    "\n",
+    "\n",
+    "#Load model\n",
+    "def _load(checkpoint_path):\n",
+    "    if device == 'cuda':\n",
+    "        checkpoint = torch.load(checkpoint_path)\n",
+    "    else:\n",
+    "        checkpoint = torch.load(checkpoint_path,\n",
+    "                                map_location=lambda storage, loc: storage)\n",
+    "    return checkpoint\n",
+    "\n",
+    "def load_model(path):\n",
+    "    model = Wav2Lip()\n",
+    "    print(\"Load checkpoint from: {}\".format(path))\n",
+    "    checkpoint = _load(path)\n",
+    "    s = checkpoint[\"state_dict\"]\n",
+    "    new_s = {}\n",
+    "    for k, v in s.items():\n",
+    "        new_s[k.replace('module.', '')] = v\n",
+    "    model.load_state_dict(new_s)\n",
+    "\n",
+    "    model = model.to(device)\n",
+    "    return model.eval()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 29,
+   "id": "249a72a3",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-10-31T15:36:42.375102Z",
+     "iopub.status.busy": "2024-10-31T15:36:42.374151Z",
+     "iopub.status.idle": "2024-10-31T15:36:42.377000Z",
+     "shell.execute_reply": "2024-10-31T15:36:42.376457Z"
+    },
+    "papermill": {
+     "duration": 22.121223,
+     "end_time": "2024-10-31T15:36:42.377133",
+     "exception": false,
+     "start_time": "2024-10-31T15:36:20.255910",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "os.mkdir('/kaggle/working/temp/')"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 30,
+   "id": "62589210",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-10-31T15:37:27.082394Z",
+     "iopub.status.busy": "2024-10-31T15:37:27.081701Z",
+     "iopub.status.idle": "2024-10-31T15:37:43.093789Z",
+     "shell.execute_reply": "2024-10-31T15:37:43.093184Z",
+     "shell.execute_reply.started": "2021-07-24T14:00:13.510341Z"
+    },
+    "papermill": {
+     "duration": 38.316679,
+     "end_time": "2024-10-31T15:37:43.093949",
+     "exception": false,
+     "start_time": "2024-10-31T15:37:04.777270",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "  0%|          | 0/1 [00:00<?, ?it/s]\n",
+      "  0%|          | 0/8 [00:00<?, ?it/s]\u001b[A\n",
+      " 12%|█▎        | 1/8 [00:03<00:25,  3.61s/it]\u001b[A\n",
+      " 25%|██▌       | 2/8 [00:04<00:13,  2.23s/it]\u001b[A\n",
+      " 38%|███▊      | 3/8 [00:06<00:09,  1.80s/it]\u001b[A\n",
+      " 50%|█████     | 4/8 [00:07<00:06,  1.60s/it]\u001b[A\n",
+      " 62%|██████▎   | 5/8 [00:08<00:04,  1.51s/it]\u001b[A\n",
+      " 75%|███████▌  | 6/8 [00:10<00:02,  1.44s/it]\u001b[A\n",
+      " 88%|████████▊ | 7/8 [00:11<00:01,  1.40s/it]\u001b[A\n",
+      "100%|██████████| 8/8 [00:12<00:00,  1.59s/it]\n"
+     ]
+    },
+    {
+     "name": "stdout",
+     "output_type": "stream",
+     "text": [
+      "Load checkpoint from: /kaggle/working/wav2lip_checkpoints/checkpoint_step000012000.pth\n",
+      "Model loaded\n"
+     ]
+    },
+    {
+     "name": "stderr",
+     "output_type": "stream",
+     "text": [
+      "100%|██████████| 1/1 [00:16<00:00, 16.01s/it]\n"
+     ]
+    }
+   ],
+   "source": [
+    "full_frames = full_frames[:len(mel_chunks)]\n",
+    "\n",
+    "batch_size = wav2lip_batch_size\n",
+    "gen = datagen(full_frames.copy(), mel_chunks)  # Face cropping and splicing, 6 channels\n",
+    "\n",
+    "for i, (img_batch, mel_batch, frames, coords) in enumerate(tqdm(gen, \n",
+    "                                        total=int(np.ceil(float(len(mel_chunks))/batch_size)))):\n",
+    "    #Load model\n",
+    "    if i == 0:\n",
+    "        model = load_model(checkpoint_path)\n",
+    "        print (\"Model loaded\")\n",
+    "\n",
+    "        frame_h, frame_w = full_frames[0].shape[:-1]\n",
+    "        #Temporary video storage\n",
+    "        out = cv2.VideoWriter('/kaggle/working/temp/result_without_audio.mp4',\n",
+    "                                cv2.VideoWriter_fourcc(*'DIVX'), fps, (frame_w, frame_h))\n",
+    "\n",
+    "    img_batch = torch.FloatTensor(np.transpose(img_batch, (0, 3, 1, 2))).to(device)\n",
+    "    mel_batch = torch.FloatTensor(np.transpose(mel_batch, (0, 3, 1, 2))).to(device)\n",
+    "    \n",
+    "    \n",
+    "    ##### Send img_batch, mel_batch into the model to get pred\n",
+    "    ##############TODO##############\n",
+    "    with torch.no_grad():\n",
+    "        pred = model(mel_batch, img_batch)\n",
+    "    \n",
+    "    pred = pred.cpu().numpy().transpose(0, 2, 3, 1) * 255.\n",
+    "\n",
+    "    for p, f, c in zip(pred, frames, coords):\n",
+    "        y1, y2, x1, x2 = c\n",
+    "        p = cv2.resize(p.astype(np.uint8), (x2 - x1, y2 - y1))\n",
+    "\n",
+    "        f[y1:y2, x1:x2] = p\n",
+    "        out.write(f)\n",
+    "\n",
+    "out.release()\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 31,
+   "id": "abc9a098",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-10-31T15:38:27.758964Z",
+     "iopub.status.busy": "2024-10-31T15:38:27.758238Z",
+     "iopub.status.idle": "2024-10-31T15:38:27.761035Z",
+     "shell.execute_reply": "2024-10-31T15:38:27.760396Z"
+    },
+    "papermill": {
+     "duration": 22.263049,
+     "end_time": "2024-10-31T15:38:27.761167",
+     "exception": false,
+     "start_time": "2024-10-31T15:38:05.498118",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [],
+   "source": [
+    "os.mkdir('/kaggle/working/result/')"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": 32,
+   "id": "8c628e0d",
+   "metadata": {
+    "execution": {
+     "iopub.execute_input": "2024-10-31T15:39:12.528909Z",
+     "iopub.status.busy": "2024-10-31T15:39:12.527853Z",
+     "iopub.status.idle": "2024-10-31T15:39:13.997957Z",
+     "shell.execute_reply": "2024-10-31T15:39:13.997426Z",
+     "shell.execute_reply.started": "2021-07-24T14:01:22.990563Z"
+    },
+    "papermill": {
+     "duration": 23.894885,
+     "end_time": "2024-10-31T15:39:13.998105",
+     "exception": false,
+     "start_time": "2024-10-31T15:38:50.103220",
+     "status": "completed"
+    },
+    "tags": []
+   },
+   "outputs": [
+    {
+     "data": {
+      "text/plain": [
+       "0"
+      ]
+     },
+     "execution_count": 32,
+     "metadata": {},
+     "output_type": "execute_result"
+    }
+   ],
+   "source": [
+    "#Merge generated video with speech\n",
+    "outfile=\"/kaggle/working/result/result.mp4\"# The final output results are placed in this folder.\n",
+    "command = 'ffmpeg -y -i {} -i {} -strict -2 -q:v 1 {}'.format(speech, '/kaggle/working/temp/result_without_audio.mp4',outfile)\n",
+    "subprocess.call(command, shell=platform.system() != 'Windows')"
+   ]
+  }
+ ],
+ "metadata": {
+  "kaggle": {
+   "accelerator": "gpu",
+   "dataSources": [
+    {
+     "datasetId": 1480682,
+     "sourceId": 2446822,
+     "sourceType": "datasetVersion"
+    },
+    {
+     "datasetId": 1486947,
+     "sourceId": 2456654,
+     "sourceType": "datasetVersion"
+    },
+    {
+     "datasetId": 1506511,
+     "sourceId": 2488763,
+     "sourceType": "datasetVersion"
+    }
+   ],
+   "dockerImageVersionId": 30121,
+   "isGpuEnabled": true,
+   "isInternetEnabled": true,
+   "language": "python",
+   "sourceType": "notebook"
+  },
+  "kernelspec": {
+   "display_name": "Python 3",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.7.10"
+  },
+  "papermill": {
+   "default_parameters": {},
+   "duration": 26506.406743,
+   "end_time": "2024-10-31T15:39:38.120847",
+   "environment_variables": {},
+   "exception": null,
+   "input_path": "__notebook__.ipynb",
+   "output_path": "__notebook__.ipynb",
+   "parameters": {},
+   "start_time": "2024-10-31T08:17:51.714104",
+   "version": "2.3.3"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 5
+}
